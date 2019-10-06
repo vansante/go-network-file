@@ -2,6 +2,7 @@ package networkfile
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -58,6 +59,7 @@ func NewFileServer(sharedSecret string) (fs *FileServer) {
 		writers:      make(map[FileID]WriterAtCloser),
 	}
 
+	fs.router.GET("/:fileID/stat", fs.checkSecret(fs.statFile))
 	fs.router.GET("/:fileID/read/:offset/:length", fs.checkSecret(fs.readFile))
 	fs.router.PUT("/:fileID/write/:offset", fs.checkSecret(fs.writeFile))
 	fs.router.POST("/:fileID/close", fs.checkSecret(fs.closeFile))
@@ -109,6 +111,44 @@ func (fs *FileServer) checkSecret(subHandler httprouter.Handle) httprouter.Handl
 	}
 }
 
+func (fs *FileServer) statFile(resp http.ResponseWriter, req *http.Request, params httprouter.Params) {
+	fileID := FileID(params.ByName("fileID"))
+
+	fs.mu.RLock()
+	reader := fs.readers[fileID]
+	fs.mu.RUnlock()
+
+	if reader == nil {
+		resp.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	file, ok := reader.(Statter)
+	if !ok {
+		resp.WriteHeader(HttpCodeUnsupportedOperation)
+		return
+	}
+	fi, err := file.Stat()
+	if err != nil {
+		fs.Errorf("FileServer.statFile: Error statting reader: %v", err)
+		writeErrorToResponseWriter(resp, err)
+		return
+	}
+
+	resp.WriteHeader(http.StatusOK)
+	info := GetFileInfo(fi)
+	data, err := json.Marshal(&info)
+	if err != nil {
+		fs.Errorf("FileServer.statFile: Error marshalling json: %v", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	_, err = resp.Write(data)
+	if err != nil {
+		fs.Errorf("FileServer.statFile: Error writing json: %v", err)
+	}
+}
+
 func (fs *FileServer) readFile(resp http.ResponseWriter, req *http.Request, params httprouter.Params) {
 	fileID := FileID(params.ByName("fileID"))
 	offset, err := strconv.ParseInt(params.ByName("offset"), 10, 64)
@@ -142,13 +182,7 @@ func (fs *FileServer) readFile(resp http.ResponseWriter, req *http.Request, para
 	buf := make([]byte, length)
 	n, err := reader.ReadAt(buf, offset)
 	if err != nil && err != io.EOF {
-		code, ok := errToHttpCode[err]
-		if !ok {
-			resp.WriteHeader(HttpCodeUnknownError)
-			_, _ = resp.Write([]byte(err.Error()))
-			return
-		}
-		resp.WriteHeader(code)
+		writeErrorToResponseWriter(resp, err)
 		return
 	}
 
