@@ -122,6 +122,7 @@ func (fs *FileServer) ServeFileWriter(ctx context.Context, fileID FileID, file W
 func (fs *FileServer) checkSecret(subHandler httprouter.Handle) httprouter.Handle {
 	return func(resp http.ResponseWriter, req *http.Request, params httprouter.Params) {
 		if req.Header.Get(HeaderSharedSecret) != fs.sharedSecret {
+			fs.Debugf("FileServer.checkSecret: Invalid secret")
 			resp.WriteHeader(http.StatusUnauthorized)
 			return
 		}

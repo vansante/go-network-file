@@ -73,13 +73,21 @@ func TestReaderCopyFile(t *testing.T) {
 	assert.Nil(t, err)
 	src, err := randomFile(137)
 	assert.Nil(t, err)
+	defer func() {
+		_ = src.Close()
+		_ = os.Remove(src.Name())
+	}()
 
 	err = srv.ServeFileReader(context.Background(), fileID, src)
 
 	rdr := NewCustomClientReader(newHTTPUnixClient(socket), "http://server", secret, fileID)
 	rdr.SetLogger(&testLogger{t})
-	dst, err := ioutil.TempFile(os.TempDir(), "writer-copy-test-")
+	dst, err := ioutil.TempFile(os.TempDir(), "reader-copy-test-")
 	assert.Nil(t, err)
+	defer func() {
+		_ = dst.Close()
+		_ = os.Remove(dst.Name())
+	}()
 
 	n, err := io.CopyBuffer(dst, rdr, make([]byte, 13))
 	assert.Nil(t, err)
@@ -118,13 +126,21 @@ func TestReaderCopySingleCall(t *testing.T) {
 	assert.Nil(t, err)
 	src, err := randomFile(13)
 	assert.Nil(t, err)
+	defer func() {
+		_ = src.Close()
+		_ = os.Remove(src.Name())
+	}()
 
 	err = srv.ServeFileReader(context.Background(), fileID, src)
 
 	rdr := NewCustomClientReader(newHTTPUnixClient(socket), "http://server", secret, fileID)
 	rdr.SetLogger(&testLogger{t})
-	dst, err := ioutil.TempFile(os.TempDir(), "writer-copy-test-")
+	dst, err := ioutil.TempFile(os.TempDir(), "reader-single-copy-test-")
 	assert.Nil(t, err)
+	defer func() {
+		_ = dst.Close()
+		_ = os.Remove(dst.Name())
+	}()
 
 	n, err := io.CopyBuffer(dst, rdr, make([]byte, 13))
 	assert.Nil(t, err)
@@ -141,6 +157,66 @@ func TestReaderCopySingleCall(t *testing.T) {
 	assert.Nil(t, err)
 
 	assert.EqualValues(t, srcBuf, dstBuf)
+
+	assert.Nil(t, srv.Shutdown(context.Background()))
+}
+
+func TestReaderSeek(t *testing.T) {
+	srv := NewFileServer(secret)
+	srv.SetLogger(&testLogger{t})
+
+	socket := newSocketPath()
+	sock, err := net.Listen("unix", socket)
+	assert.Nil(t, err)
+	go func() {
+		err = srv.Serve(sock)
+		assert.EqualValues(t, http.ErrServerClosed, err)
+	}()
+
+	srv.SetLogger(&testLogger{t})
+
+	fileID, err := RandomFileID()
+	assert.Nil(t, err)
+	src, err := randomFile(183)
+	assert.Nil(t, err)
+
+	_, err = src.Seek(0, io.SeekStart)
+	assert.Nil(t, err)
+	srcBuf, err := ioutil.ReadAll(src)
+	assert.Nil(t, err)
+
+	err = srv.ServeFileReader(context.Background(), fileID, src)
+
+	rdr := NewCustomClientReader(newHTTPUnixClient(socket), "http://server", secret, fileID)
+	rdr.SetLogger(&testLogger{t})
+
+	off, err := rdr.Seek(2, io.SeekStart)
+	assert.Nil(t, err)
+	assert.EqualValues(t, 2, off)
+
+	buf := make([]byte, 11)
+	n, err := rdr.Read(buf)
+	assert.EqualValues(t, 11, n)
+	assert.Nil(t, err)
+	assert.EqualValues(t, srcBuf[2:2+11], buf)
+
+	off, err = rdr.Seek(-2, io.SeekCurrent)
+	assert.Nil(t, err)
+	assert.EqualValues(t, 2+11-2, off)
+
+	n, err = rdr.Read(buf)
+	assert.EqualValues(t, 11, n)
+	assert.Nil(t, err)
+	assert.EqualValues(t, srcBuf[2+11-2:2+11-2+11], buf)
+
+	off, err = rdr.Seek(-37, io.SeekEnd)
+	assert.Nil(t, err)
+	assert.EqualValues(t, 183-37, off)
+
+	n, err = rdr.Read(buf)
+	assert.EqualValues(t, 11, n)
+	assert.Nil(t, err)
+	assert.EqualValues(t, srcBuf[183-37:183-37+11], buf)
 
 	assert.Nil(t, srv.Shutdown(context.Background()))
 }
