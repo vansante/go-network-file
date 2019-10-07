@@ -64,7 +64,7 @@ func TestReaderCopyFile(t *testing.T) {
 	assert.Nil(t, err)
 	go func() {
 		err = srv.Serve(sock)
-		assert.Nil(t, err)
+		assert.EqualValues(t, http.ErrServerClosed, err)
 	}()
 
 	srv.SetLogger(&testLogger{t})
@@ -96,6 +96,97 @@ func TestReaderCopyFile(t *testing.T) {
 	assert.Nil(t, err)
 
 	assert.EqualValues(t, srcBuf, dstBuf)
+
+	assert.Nil(t, srv.Shutdown(context.Background()))
+}
+
+func TestReaderCopySingleCall(t *testing.T) {
+	srv := NewFileServer(secret)
+	srv.SetLogger(&testLogger{t})
+
+	socket := newSocketPath()
+	sock, err := net.Listen("unix", socket)
+	assert.Nil(t, err)
+	go func() {
+		err = srv.Serve(sock)
+		assert.EqualValues(t, http.ErrServerClosed, err)
+	}()
+
+	srv.SetLogger(&testLogger{t})
+
+	fileID, err := RandomFileID()
+	assert.Nil(t, err)
+	src, err := randomFile(13)
+	assert.Nil(t, err)
+
+	err = srv.ServeFileReader(context.Background(), fileID, src)
+
+	rdr := NewCustomClientReader(newHTTPUnixClient(socket), "http://server", secret, fileID)
+	rdr.SetLogger(&testLogger{t})
+	dst, err := ioutil.TempFile(os.TempDir(), "writer-copy-test-")
+	assert.Nil(t, err)
+
+	n, err := io.CopyBuffer(dst, rdr, make([]byte, 13))
+	assert.Nil(t, err)
+	assert.EqualValues(t, 13, n)
+
+	_, err = src.Seek(0, io.SeekStart)
+	assert.Nil(t, err)
+	srcBuf, err := ioutil.ReadAll(src)
+	assert.Nil(t, err)
+
+	_, err = dst.Seek(0, io.SeekStart)
+	assert.Nil(t, err)
+	dstBuf, err := ioutil.ReadAll(dst)
+	assert.Nil(t, err)
+
+	assert.EqualValues(t, srcBuf, dstBuf)
+
+	assert.Nil(t, srv.Shutdown(context.Background()))
+}
+
+func TestReaderBadSecret(t *testing.T) {
+	srv := NewFileServer(secret)
+	srv.SetLogger(&testLogger{t})
+
+	socket := newSocketPath()
+	sock, err := net.Listen("unix", socket)
+	assert.Nil(t, err)
+	go func() {
+		err = srv.Serve(sock)
+		assert.EqualValues(t, http.ErrServerClosed, err)
+	}()
+	time.Sleep(100 * time.Millisecond)
+
+	rdr := NewCustomClientReader(newHTTPUnixClient(socket), "http://server", "wrong", "test")
+	rdr.SetLogger(&testLogger{t})
+	n, err := rdr.Read(make([]byte, 11))
+	assert.EqualValues(t, 0, n)
+	assert.Equal(t, ErrUnauthorized, err)
+
+	assert.Nil(t, srv.Shutdown(context.Background()))
+}
+
+func TestReaderUnknownFile(t *testing.T) {
+	srv := NewFileServer(secret)
+	srv.SetLogger(&testLogger{t})
+
+	socket := newSocketPath()
+	sock, err := net.Listen("unix", socket)
+	assert.Nil(t, err)
+	go func() {
+		err = srv.Serve(sock)
+		assert.EqualValues(t, http.ErrServerClosed, err)
+	}()
+	time.Sleep(100 * time.Millisecond)
+
+	rdr := NewCustomClientReader(newHTTPUnixClient(socket), "http://server", secret, "test")
+	rdr.SetLogger(&testLogger{t})
+	n, err := rdr.Read(make([]byte, 11))
+	assert.EqualValues(t, 0, n)
+	assert.Equal(t, ErrUnknownFile, err)
+
+	assert.Nil(t, srv.Shutdown(context.Background()))
 }
 
 type testLogger struct {

@@ -22,5 +22,5 @@ func RandomFileID() (FileID, error) {
 		return "", err
 	}
 
-	return FileID(base64.RawStdEncoding.EncodeToString(buf)), nil
+	return FileID(base64.RawURLEncoding.EncodeToString(buf)), nil
 }

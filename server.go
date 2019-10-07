@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -21,8 +22,11 @@ const (
 	// MaximumBufferSize is the maximum read size for one HTTP call
 	MaximumBufferSize = 10 * 1024 * 1024
 
-	// SharedSecretHeader is the name of the header where the shared secret is passed
-	SharedSecretHeader = "X-SharedSecret"
+	// HeaderSharedSecret is the name of the header where the shared secret is passed
+	HeaderSharedSecret = "X-SharedSecret"
+
+	// HeaderIsEOF is the name of the header which indicates whether the EOF (end of file) has been reached
+	HeaderIsEOF = "X-IsEOF"
 )
 
 // ReaderAtCloser combines the io.ReaderAt and io.Closer interfaces
@@ -62,6 +66,14 @@ func NewFileServer(sharedSecret string) (fs *FileServer) {
 	fs.router.PUT("/:fileID/write/:offset", fs.checkSecret(fs.writeFile))
 	fs.router.POST("/:fileID/close", fs.checkSecret(fs.closeFile))
 
+	fs.router.NotFound = http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
+		fs.Debugf("FileServer: %s %s [404 not found]", req.Method, req.URL.String())
+		resp.WriteHeader(http.StatusNotFound)
+	})
+	fs.router.MethodNotAllowed = http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
+		fs.Debugf("FileServer: %s %s [405 method not allowed]", req.Method, req.URL.String())
+		resp.WriteHeader(http.StatusMethodNotAllowed)
+	})
 	fs.server = &http.Server{Handler: fs.router}
 	return fs
 }
@@ -109,7 +121,7 @@ func (fs *FileServer) ServeFileWriter(ctx context.Context, fileID FileID, file W
 // Returns HTTP 401 otherwise.
 func (fs *FileServer) checkSecret(subHandler httprouter.Handle) httprouter.Handle {
 	return func(resp http.ResponseWriter, req *http.Request, params httprouter.Params) {
-		if req.Header.Get(SharedSecretHeader) != fs.sharedSecret {
+		if req.Header.Get(HeaderSharedSecret) != fs.sharedSecret {
 			resp.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -193,7 +205,9 @@ func (fs *FileServer) readFile(resp http.ResponseWriter, req *http.Request, para
 		return
 	}
 
-	fs.Debugf("FileServer.readFile: Read %d bytes from offset %d from file %s", n, offset, fileID)
+	eof := err == io.EOF
+	resp.Header().Set(HeaderIsEOF, fmt.Sprintf("%v", eof))
+	fs.Debugf("FileServer.readFile: Read %d bytes from offset %d from file %s [EOF: %v]", n, offset, fileID, eof)
 
 	resp.WriteHeader(http.StatusOK)
 	_, err = resp.Write(buf[:n])

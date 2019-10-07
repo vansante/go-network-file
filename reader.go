@@ -93,7 +93,7 @@ func (r *Reader) prepareRequest(method, url string) (req *http.Request, err erro
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set(SharedSecretHeader, r.sharedSecret)
+	req.Header.Set(HeaderSharedSecret, r.sharedSecret)
 	return req, nil
 }
 
@@ -183,8 +183,12 @@ func (r *Reader) read(buf []byte, offset int64) (n int, err error) {
 		r.Errorf("Reader.read: Error reading http body: %v", err)
 		return n, err
 	}
+	err = resp.Body.Close()
+	if err != nil {
+		r.Errorf("Reader.read: Error closing body: %v", err)
+	}
+	eof := resp.Header.Get(HeaderIsEOF) == "true"
 
-	eof := n < len(buf)
 	r.Debugf("Reader.read: Read %d bytes from offset %d in file %s [EOF: %v]", n, offset, r.fileID, eof)
 	if eof {
 		return n, io.EOF

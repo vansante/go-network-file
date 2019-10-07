@@ -20,8 +20,12 @@ const (
 
 var (
 	ErrUnsupportedOperation = errors.New("unsupported operation")
+	ErrUnauthorized         = errors.New("unauthorized: wrong secret key")
+	ErrUnknownFile          = errors.New("not found: unknown file")
 
 	httpCodeToErr = map[int]error{
+		http.StatusUnauthorized:      ErrUnauthorized,
+		http.StatusNotFound:          ErrUnknownFile,
 		HttpCodeEOF:                  io.EOF,
 		HttpCodeUnexpectedEOF:        io.ErrUnexpectedEOF,
 		HttpCodeShortBuffer:          io.ErrShortBuffer,
@@ -67,7 +71,10 @@ func responseCodeToError(resp *http.Response) (err error) {
 	buf := make([]byte, 512)
 	n, err := resp.Body.Read(buf)
 	if err != nil && err != io.EOF {
-		return fmt.Errorf("an unknown error occurred but the error could not be determined because: %v", err)
+		return fmt.Errorf(
+			"%d: an unknown error occurred but the error could not be determined because: %v",
+			resp.StatusCode, err,
+		)
 	}
-	return fmt.Errorf("an unknown error occurred: %s", string(buf[:n]))
+	return fmt.Errorf("%d: an unknown error occurred: %s", resp.StatusCode, string(buf[:n]))
 }
