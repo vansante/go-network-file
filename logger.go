@@ -4,6 +4,7 @@ package networkfile
 type Logger interface {
 	Infof(format string, args ...interface{})
 	Errorf(format string, args ...interface{})
+	Debugf(format string, args ...interface{})
 }
 
 // embedLogger is a embeddable struct to make another struct more easily loggable
@@ -14,6 +15,14 @@ type embedLogger struct {
 // SetLogger sets a logger on the server
 func (l *embedLogger) SetLogger(logger Logger) {
 	l.logger = logger
+}
+
+// Debugf checks if a logger is present and logs to it at info level if it is
+func (l *embedLogger) Debugf(format string, args ...interface{}) {
+	if l.logger == nil {
+		return
+	}
+	l.logger.Debugf(format, args...)
 }
 
 // Infof checks if a logger is present and logs to it at info level if it is

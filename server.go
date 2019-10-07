@@ -25,9 +25,6 @@ const (
 	SharedSecretHeader = "X-SharedSecret"
 )
 
-// FileID is a unique descriptor for a file, should be usable in an URL.
-type FileID string
-
 // ReaderAtCloser combines the io.ReaderAt and io.Closer interfaces
 type ReaderAtCloser interface {
 	io.ReaderAt
@@ -40,6 +37,7 @@ type WriterAtCloser interface {
 	io.Closer
 }
 
+// FileServer is a HTTP server that serves files as io.Readers or io.Writers
 type FileServer struct {
 	embedLogger
 	sharedSecret string
@@ -48,9 +46,9 @@ type FileServer struct {
 	readers      map[FileID]ReaderAtCloser
 	writers      map[FileID]WriterAtCloser
 	mu           sync.RWMutex
-	logger       Logger
 }
 
+// NewFileServer creates a new FileServer with a given shared secret
 func NewFileServer(sharedSecret string) (fs *FileServer) {
 	fs = &FileServer{
 		sharedSecret: sharedSecret,
@@ -68,10 +66,18 @@ func NewFileServer(sharedSecret string) (fs *FileServer) {
 	return fs
 }
 
+// Serve starts serving the FileServer over HTTP over the given socket
 func (fs *FileServer) Serve(socket net.Listener) (err error) {
 	return fs.server.Serve(socket)
 }
 
+// Shutdown shuts down the HTTP server gracefully with a context.
+// The socket needs to be closed manually
+func (fs *FileServer) Shutdown(ctx context.Context) (err error) {
+	return fs.server.Shutdown(ctx)
+}
+
+// ServeFileReader makes the given Reader available under the given FileID
 func (fs *FileServer) ServeFileReader(ctx context.Context, fileID FileID, file ReaderAtCloser) (err error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
@@ -85,6 +91,7 @@ func (fs *FileServer) ServeFileReader(ctx context.Context, fileID FileID, file R
 	return nil
 }
 
+// ServeFileReader makes the given Writer available under the given FileID
 func (fs *FileServer) ServeFileWriter(ctx context.Context, fileID FileID, file WriterAtCloser) (err error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
@@ -153,19 +160,19 @@ func (fs *FileServer) readFile(resp http.ResponseWriter, req *http.Request, para
 	fileID := FileID(params.ByName("fileID"))
 	offset, err := strconv.ParseInt(params.ByName("offset"), 10, 64)
 	if err != nil {
-		fs.Infof("FileServer.readFile: Bad offset parameter (%s)", params.ByName("offset"))
+		fs.Debugf("FileServer.readFile: Bad offset parameter (%s)", params.ByName("offset"))
 		resp.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
 	length, err := strconv.ParseInt(params.ByName("length"), 10, 64)
 	if err != nil {
-		fs.Infof("FileServer.readFile: Bad length parameter (%s)", params.ByName("length"))
+		fs.Debugf("FileServer.readFile: Bad length parameter (%s)", params.ByName("length"))
 		resp.WriteHeader(http.StatusBadRequest)
 		return
 	}
 	if length > MaximumBufferSize {
-		fs.Infof("FileServer.readFile: Length parameter too great (%d)", length)
+		fs.Debugf("FileServer.readFile: Length parameter too great (%d)", length)
 		resp.WriteHeader(http.StatusBadRequest)
 		return
 	}
@@ -185,6 +192,8 @@ func (fs *FileServer) readFile(resp http.ResponseWriter, req *http.Request, para
 		writeErrorToResponseWriter(resp, err)
 		return
 	}
+
+	fs.Debugf("FileServer.readFile: Read %d bytes from offset %d from file %s", n, offset, fileID)
 
 	resp.WriteHeader(http.StatusOK)
 	_, err = resp.Write(buf[:n])
