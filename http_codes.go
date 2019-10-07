@@ -36,6 +36,8 @@ var (
 	}
 
 	errToHttpCode = map[error]int{
+		ErrUnauthorized:         http.StatusUnauthorized,
+		ErrUnknownFile:          http.StatusNotFound,
 		io.EOF:                  HttpCodeEOF,
 		io.ErrUnexpectedEOF:     HttpCodeUnexpectedEOF,
 		io.ErrShortBuffer:       HttpCodeShortBuffer,

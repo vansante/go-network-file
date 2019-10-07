@@ -44,21 +44,23 @@ type WriterAtCloser interface {
 // FileServer is a HTTP server that serves files as io.Readers or io.Writers
 type FileServer struct {
 	embedLogger
-	sharedSecret string
-	server       *http.Server
-	router       *httprouter.Router
-	readers      map[FileID]ReaderAtCloser
-	writers      map[FileID]WriterAtCloser
-	mu           sync.RWMutex
+	sharedSecret      string
+	discloseFilenames bool // Allow disclosing filename via Stat()
+	server            *http.Server
+	router            *httprouter.Router
+	readers           map[FileID]ReaderAtCloser
+	writers           map[FileID]WriterAtCloser
+	mu                sync.RWMutex
 }
 
 // NewFileServer creates a new FileServer with a given shared secret
 func NewFileServer(sharedSecret string) (fs *FileServer) {
 	fs = &FileServer{
-		sharedSecret: sharedSecret,
-		router:       httprouter.New(),
-		readers:      make(map[FileID]ReaderAtCloser),
-		writers:      make(map[FileID]WriterAtCloser),
+		sharedSecret:      sharedSecret,
+		discloseFilenames: true,
+		router:            httprouter.New(),
+		readers:           make(map[FileID]ReaderAtCloser),
+		writers:           make(map[FileID]WriterAtCloser),
 	}
 
 	fs.router.GET("/:fileID/stat", fs.checkSecret(fs.statFile))
@@ -76,6 +78,11 @@ func NewFileServer(sharedSecret string) (fs *FileServer) {
 	})
 	fs.server = &http.Server{Handler: fs.router}
 	return fs
+}
+
+// DiscloseFilenames sets whether the real filenames should be disclosed on Stat()
+func (fs *FileServer) DiscloseFilenames(secret bool) {
+	fs.discloseFilenames = secret
 }
 
 // Serve starts serving the FileServer over HTTP over the given socket
@@ -157,6 +164,9 @@ func (fs *FileServer) statFile(resp http.ResponseWriter, req *http.Request, para
 
 	resp.WriteHeader(http.StatusOK)
 	info := GetFileInfo(fi)
+	if !fs.discloseFilenames {
+		info.FileName = string(fileID)
+	}
 	data, err := json.Marshal(&info)
 	if err != nil {
 		fs.Errorf("FileServer.statFile: Error marshalling json: %v", err)
