@@ -23,7 +23,7 @@ const (
 )
 
 func randomFile(size int) (*os.File, error) {
-	file, err := ioutil.TempFile(os.TempDir(), "reader-")
+	file, err := ioutil.TempFile(os.TempDir(), "rndfile-")
 	if err != nil {
 		return nil, err
 	}
