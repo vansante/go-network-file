@@ -99,15 +99,11 @@ func (r *Reader) prepareRequest(method, url string) (req *http.Request, err erro
 
 // stat returns the remote file information
 func (r *Reader) stat() (fi FileInfo, err error) {
-	url := fmt.Sprintf(
-		"%s/%s/stat",
-		r.baseURL,
-		r.fileID,
-	)
+	url := fmt.Sprintf("%s/%s", r.baseURL, r.fileID)
 
 	r.Debugf("Reader.stat: Statting file %s", r.fileID)
 
-	req, err := r.prepareRequest(http.MethodGet, url)
+	req, err := r.prepareRequest(http.MethodOptions, url)
 	if err != nil {
 		r.Errorf("Reader.stat: Error creating request: %v", err)
 		return fi, err
@@ -145,19 +141,14 @@ func (r *Reader) stat() (fi FileInfo, err error) {
 }
 
 func (r *Reader) read(buf []byte, offset int64) (n int, err error) {
-	url := fmt.Sprintf(
-		"%s/%s/read/%d/%d",
-		r.baseURL,
-		r.fileID,
-		offset,
-		len(buf),
-	)
+	url := fmt.Sprintf("%s/%s", r.baseURL, r.fileID)
 
 	req, err := r.prepareRequest(http.MethodGet, url)
 	if err != nil {
 		r.Errorf("Reader.read: Error creating request: %v", err)
 		return 0, err
 	}
+	req.Header.Set(HeaderRange, fmt.Sprintf("%d-%d", offset, len(buf)))
 
 	ctx, cancel := context.WithTimeout(context.Background(), HTTPTimeout)
 	defer cancel()

@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"strconv"
 	"sync"
 
 	"github.com/julienschmidt/httprouter"
@@ -22,11 +21,20 @@ const (
 	// MaximumBufferSize is the maximum read size for one HTTP call
 	MaximumBufferSize = 10 * 1024 * 1024
 
+	// MaximumBufferSize is the minimum read size for one HTTP call
+	MinumumBufferSize = 10
+
 	// HeaderSharedSecret is the name of the header where the shared secret is passed
 	HeaderSharedSecret = "X-SharedSecret"
 
 	// HeaderIsEOF is the name of the header which indicates whether the EOF (end of file) has been reached
 	HeaderIsEOF = "X-IsEOF"
+
+	// HeaderRange is the header used for sending ranges
+	HeaderRange = "X-Range"
+
+	// HeaderContentLength is the header used for sending the file size
+	HeaderContentLength = "Content-Length"
 )
 
 // ReaderAtCloser combines the io.ReaderAt and io.Closer interfaces
@@ -63,10 +71,10 @@ func NewFileServer(sharedSecret string) (fs *FileServer) {
 		writers:           make(map[FileID]WriterAtCloser),
 	}
 
-	fs.router.GET("/:fileID/stat", fs.checkSecret(fs.statFile))
-	fs.router.GET("/:fileID/read/:offset/:length", fs.checkSecret(fs.readFile))
-	fs.router.PUT("/:fileID/write/:offset", fs.checkSecret(fs.writeFile))
-	fs.router.POST("/:fileID/close", fs.checkSecret(fs.closeFile))
+	fs.router.OPTIONS("/:fileID", fs.checkSecret(fs.fileOptions))
+	fs.router.GET("/:fileID", fs.checkSecret(fs.readFile))
+	fs.router.PATCH("/:fileID", fs.checkSecret(fs.writeFile))
+	fs.router.DELETE("/:fileID", fs.checkSecret(fs.closeFile))
 
 	fs.router.NotFound = http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
 		fs.Debugf("FileServer: %s %s [404 not found]", req.Method, req.URL.String())
@@ -76,6 +84,7 @@ func NewFileServer(sharedSecret string) (fs *FileServer) {
 		fs.Debugf("FileServer: %s %s [405 method not allowed]", req.Method, req.URL.String())
 		resp.WriteHeader(http.StatusMethodNotAllowed)
 	})
+
 	fs.server = &http.Server{Handler: fs.router}
 	return fs
 }
@@ -138,35 +147,44 @@ func (fs *FileServer) checkSecret(subHandler httprouter.Handle) httprouter.Handl
 	}
 }
 
-func (fs *FileServer) statFile(resp http.ResponseWriter, req *http.Request, params httprouter.Params) {
-	fileID := FileID(params.ByName("fileID"))
-
+func (fs *FileServer) statFile(fileID FileID) (info FileInfo, err error) {
 	fs.mu.RLock()
 	reader := fs.readers[fileID]
 	fs.mu.RUnlock()
 
 	if reader == nil {
-		resp.WriteHeader(http.StatusNotFound)
-		return
+		return info, ErrUnknownFile
 	}
 
 	file, ok := reader.(Statter)
 	if !ok {
-		resp.WriteHeader(HttpCodeUnsupportedOperation)
-		return
+		return info, ErrUnsupportedOperation
 	}
 	fi, err := file.Stat()
 	if err != nil {
-		fs.Errorf("FileServer.statFile: Error statting reader: %v", err)
+		fs.Errorf("FileServer.statFile: Error statting reader %s: %v", fileID, err)
+		return info, err
+	}
+
+	info = GetFileInfo(fi)
+	if !fs.discloseFilenames {
+		info.FileName = string(fileID)
+	}
+	return info, nil
+}
+
+func (fs *FileServer) fileOptions(resp http.ResponseWriter, req *http.Request, params httprouter.Params) {
+	fileID := FileID(params.ByName("fileID"))
+	info, err := fs.statFile(fileID)
+	if err != nil {
+		fs.Debugf("FileServer.statFile: Error statting reader: %v", err)
 		writeErrorToResponseWriter(resp, err)
 		return
 	}
 
 	resp.WriteHeader(http.StatusOK)
-	info := GetFileInfo(fi)
-	if !fs.discloseFilenames {
-		info.FileName = string(fileID)
-	}
+	resp.Header().Set(HeaderContentLength, fmt.Sprintf("%d", info.FileSize))
+
 	data, err := json.Marshal(&info)
 	if err != nil {
 		fs.Errorf("FileServer.statFile: Error marshalling json: %v", err)
@@ -181,21 +199,24 @@ func (fs *FileServer) statFile(resp http.ResponseWriter, req *http.Request, para
 
 func (fs *FileServer) readFile(resp http.ResponseWriter, req *http.Request, params httprouter.Params) {
 	fileID := FileID(params.ByName("fileID"))
-	offset, err := strconv.ParseInt(params.ByName("offset"), 10, 64)
-	if err != nil {
-		fs.Debugf("FileServer.readFile: Bad offset parameter (%s)", params.ByName("offset"))
+	byteRange := req.Header.Get(HeaderRange)
+
+	var offset, length int64
+	n, err := fmt.Sscanf(byteRange, "%d-%d", &offset, &length)
+	if err != nil || n != 2 {
+		fs.Debugf("FileServer.readFile: Error reading range header (%s)", byteRange)
 		resp.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	length, err := strconv.ParseInt(params.ByName("length"), 10, 64)
-	if err != nil {
-		fs.Debugf("FileServer.readFile: Bad length parameter (%s)", params.ByName("length"))
+	if offset < 0 {
+		fs.Debugf("FileServer.readFile: Invalid offset (%d)", offset)
 		resp.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	if length > MaximumBufferSize {
-		fs.Debugf("FileServer.readFile: Length parameter too great (%d)", length)
+
+	if length < MinumumBufferSize || length > MaximumBufferSize {
+		fs.Debugf("FileServer.readFile: Invalid buffer length (%d)", length)
 		resp.WriteHeader(http.StatusBadRequest)
 		return
 	}
@@ -210,7 +231,7 @@ func (fs *FileServer) readFile(resp http.ResponseWriter, req *http.Request, para
 	}
 
 	buf := make([]byte, length)
-	n, err := reader.ReadAt(buf, offset)
+	n, err = reader.ReadAt(buf, offset)
 	if err != nil && err != io.EOF {
 		writeErrorToResponseWriter(resp, err)
 		return
@@ -218,6 +239,8 @@ func (fs *FileServer) readFile(resp http.ResponseWriter, req *http.Request, para
 
 	eof := err == io.EOF
 	resp.Header().Set(HeaderIsEOF, fmt.Sprintf("%v", eof))
+	resp.Header().Set(HeaderRange, fmt.Sprintf("%d-%d", offset, offset+int64(n)))
+
 	fs.Debugf("FileServer.readFile: Read %d bytes from offset %d from file %s [EOF: %v]", n, offset, fileID, eof)
 
 	resp.WriteHeader(http.StatusOK)
