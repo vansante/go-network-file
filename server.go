@@ -219,8 +219,8 @@ func (fs *FileServer) fileOptions(resp http.ResponseWriter, req *http.Request, p
 func (fs *FileServer) requestOffsetAndLength(resp http.ResponseWriter, req *http.Request) (offset, length int64, ok bool) {
 	byteRange := req.Header.Get(HeaderRange)
 
-	n, err := fmt.Sscanf(byteRange, "%d-%d", &offset, &length)
-	if err != nil || n != 2 {
+	matches, err := fmt.Sscanf(byteRange, "%d-%d", &offset, &length)
+	if err != nil || matches != 2 {
 		fs.Debugf("FileServer.readFile: Error parsing range header (%s): %v", byteRange, err)
 		resp.WriteHeader(http.StatusBadRequest)
 		_, _ = resp.Write([]byte("error parsing range header"))
@@ -269,7 +269,7 @@ func (fs *FileServer) readFile(resp http.ResponseWriter, req *http.Request, para
 
 	eof := err == io.EOF
 	resp.Header().Set(HeaderIsEOF, fmt.Sprintf("%v", eof))
-	resp.Header().Set(HeaderRange, fmt.Sprintf("%d-%d", offset, offset+int64(n)))
+	resp.Header().Set(HeaderRange, fmt.Sprintf("%d-%d", offset, n))
 
 	fs.Debugf("FileServer.readFile: Read %d bytes from offset %d from file %s [EOF: %v]", n, offset, fileID, eof)
 

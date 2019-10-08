@@ -53,6 +53,11 @@ func (f *file) Stat() (fi os.FileInfo, err error) {
 	return &info, nil
 }
 
+// Close tells the server to close the remote file
+func (f *file) Close() (err error) {
+	return f.close()
+}
+
 // prepareRequest prepares a new HTTP request
 func (f *file) prepareRequest(method, url string, body io.Reader) (req *http.Request, err error) {
 	req, err = http.NewRequest(method, url, body)
@@ -66,9 +71,6 @@ func (f *file) prepareRequest(method, url string, body io.Reader) (req *http.Req
 // stat returns the remote file information
 func (f *file) stat() (fi FileInfo, err error) {
 	url := fmt.Sprintf("%s/%s", f.baseURL, f.fileID)
-
-	f.Debugf("file.stat: Statting file %s", f.fileID)
-
 	req, err := f.prepareRequest(http.MethodOptions, url, nil)
 	if err != nil {
 		f.Errorf("file.stat: Error creating request: %v", err)
@@ -103,4 +105,34 @@ func (f *file) stat() (fi FileInfo, err error) {
 
 	f.Debugf("file.stat: File info for %s: %v", f.fileID, fi)
 	return fi, nil
+}
+
+// close tells the remote server to close the file
+func (f *file) close() (err error) {
+	url := fmt.Sprintf("%s/%s", f.baseURL, f.fileID)
+	req, err := f.prepareRequest(http.MethodDelete, url, nil)
+	if err != nil {
+		f.Errorf("file.close: Error creating request: %v", err)
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), HTTPTimeout)
+	defer cancel()
+	req = req.WithContext(ctx)
+
+	resp, err := f.client.Do(req)
+	if err != nil {
+		f.Errorf("file.close: Error executing request: %v", err)
+		return err
+	}
+	_ = resp.Body.Close()
+
+	err = responseCodeToError(resp, http.StatusNoContent)
+	if err != nil {
+		f.Infof("file.close: A remote error occurred: %v", err)
+		return err
+	}
+
+	f.Debugf("file.close: The remote file %s was closed", f.fileID)
+	return nil
 }
