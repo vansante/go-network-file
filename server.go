@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"sync"
@@ -147,22 +148,28 @@ func (fs *FileServer) checkSecret(subHandler httprouter.Handle) httprouter.Handl
 	}
 }
 
+// statFile attempts to stat the opened reader/writer to retrieve file information
 func (fs *FileServer) statFile(fileID FileID) (info FileInfo, err error) {
+	var handle interface{}
+
 	fs.mu.RLock()
-	reader := fs.readers[fileID]
+	handle = fs.readers[fileID]
+	if handle == nil {
+		handle = fs.writers[fileID]
+	}
 	fs.mu.RUnlock()
 
-	if reader == nil {
+	if handle == nil {
 		return info, ErrUnknownFile
 	}
 
-	file, ok := reader.(Statter)
+	file, ok := handle.(Statter)
 	if !ok {
 		return info, ErrUnsupportedOperation
 	}
 	fi, err := file.Stat()
 	if err != nil {
-		fs.Errorf("FileServer.statFile: Error statting reader %s: %v", fileID, err)
+		fs.Errorf("FileServer.statFile: Error statting handle %s: %v", fileID, err)
 		return info, err
 	}
 
@@ -173,6 +180,7 @@ func (fs *FileServer) statFile(fileID FileID) (info FileInfo, err error) {
 	return info, nil
 }
 
+// fileOptions handles stat requests from the remote reader/writer
 func (fs *FileServer) fileOptions(resp http.ResponseWriter, req *http.Request, params httprouter.Params) {
 	fileID := FileID(params.ByName("fileID"))
 	info, err := fs.statFile(fileID)
@@ -197,27 +205,36 @@ func (fs *FileServer) fileOptions(resp http.ResponseWriter, req *http.Request, p
 	}
 }
 
-func (fs *FileServer) readFile(resp http.ResponseWriter, req *http.Request, params httprouter.Params) {
-	fileID := FileID(params.ByName("fileID"))
+// requestOffsetAndLength retrieves the offset and length of the read/write requests
+func (fs *FileServer) requestOffsetAndLength(resp http.ResponseWriter, req *http.Request) (offset, length int64, ok bool) {
 	byteRange := req.Header.Get(HeaderRange)
 
-	var offset, length int64
 	n, err := fmt.Sscanf(byteRange, "%d-%d", &offset, &length)
 	if err != nil || n != 2 {
 		fs.Debugf("FileServer.readFile: Error reading range header (%s)", byteRange)
 		resp.WriteHeader(http.StatusBadRequest)
-		return
+		return 0, 0, false
 	}
 
 	if offset < 0 {
 		fs.Debugf("FileServer.readFile: Invalid offset (%d)", offset)
 		resp.WriteHeader(http.StatusBadRequest)
-		return
+		return 0, 0, false
 	}
 
 	if length < MinumumBufferSize || length > MaximumBufferSize {
 		fs.Debugf("FileServer.readFile: Invalid buffer length (%d)", length)
 		resp.WriteHeader(http.StatusBadRequest)
+		return 0, 0, false
+	}
+	return offset, length, true
+}
+
+// readFile handles read http requests from the remote reader
+func (fs *FileServer) readFile(resp http.ResponseWriter, req *http.Request, params httprouter.Params) {
+	fileID := FileID(params.ByName("fileID"))
+	offset, length, ok := fs.requestOffsetAndLength(resp, req)
+	if !ok {
 		return
 	}
 
@@ -231,7 +248,7 @@ func (fs *FileServer) readFile(resp http.ResponseWriter, req *http.Request, para
 	}
 
 	buf := make([]byte, length)
-	n, err = reader.ReadAt(buf, offset)
+	n, err := reader.ReadAt(buf, offset)
 	if err != nil && err != io.EOF {
 		writeErrorToResponseWriter(resp, err)
 		return
@@ -243,22 +260,62 @@ func (fs *FileServer) readFile(resp http.ResponseWriter, req *http.Request, para
 
 	fs.Debugf("FileServer.readFile: Read %d bytes from offset %d from file %s [EOF: %v]", n, offset, fileID, eof)
 
-	resp.WriteHeader(http.StatusOK)
+	resp.WriteHeader(http.StatusPartialContent)
 	_, err = resp.Write(buf[:n])
 	if err != nil {
 		fs.Errorf("FileServer.readFile: Error writing buffer to response: %v", err)
 	}
 }
 
+// writeFile handles write http requests from the remote writer
 func (fs *FileServer) writeFile(resp http.ResponseWriter, req *http.Request, params httprouter.Params) {
-	//fileID := FileID(params.ByName("fileID"))
+	fileID := FileID(params.ByName("fileID"))
+	offset, length, ok := fs.requestOffsetAndLength(resp, req)
+	if !ok {
+		return
+	}
 
 	fs.mu.RLock()
-	defer fs.mu.RUnlock()
+	writer := fs.writers[fileID]
+	fs.mu.RUnlock()
 
-	// TODO: FIXME
+	if writer == nil {
+		resp.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	buf := make([]byte, length+1)
+	n, err := req.Body.Read(buf)
+	if err != nil && err != io.EOF {
+		fs.Errorf("FileServer.writeFile: Error reading request body: %v", err)
+		writeErrorToResponseWriter(resp, err)
+		return
+	}
+	if int64(n) != length {
+		fs.Debugf("FileServer.writeFile: Invalid body length (%d != %d)", n, length)
+		resp.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	n, err = writer.WriteAt(buf, offset)
+	if err != nil && err != io.EOF {
+		fs.Errorf("FileServer.writeFile: Error writing to writer: %v", err)
+		writeErrorToResponseWriter(resp, err)
+		return
+	}
+
+	if int64(n) != length {
+		log.Panicf("FileServer.writeFile: Logic error, should not happen (%d != %d)", n, length)
+	}
+
+	fs.Debugf("FileServer.writeFile: Wrote %d bytes from offset %d in file %s", n, offset, fileID)
+
+	resp.WriteHeader(http.StatusNoContent)
+	resp.Header().Set(HeaderRange, fmt.Sprintf("%d-%d", offset, offset+int64(n)))
+
 }
 
+// closeFile handles http requests to close a reader/writer
 func (fs *FileServer) closeFile(resp http.ResponseWriter, req *http.Request, params httprouter.Params) {
 	fileID := FileID(params.ByName("fileID"))
 	closed := 0

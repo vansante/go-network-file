@@ -60,8 +60,8 @@ func writeErrorToResponseWriter(rw http.ResponseWriter, err error) {
 }
 
 // responseCodeToError returns the right error from the given response
-func responseCodeToError(resp *http.Response) (err error) {
-	if resp.StatusCode == http.StatusOK {
+func responseCodeToError(resp *http.Response, expected int) (err error) {
+	if resp.StatusCode == expected {
 		return nil
 	}
 
