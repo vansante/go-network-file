@@ -14,8 +14,8 @@ type Statter interface {
 type FileInfo struct {
 	FileName    string      `json:"name"`    // base name of the file
 	FileSize    int64       `json:"size"`    // length in bytes for regular files; system-dependent for others
-	FileMode    os.FileMode `json:"mode"`    // file mode bits
 	FileModTime int64       `json:"modtime"` // modification time
+	FileMode    os.FileMode `json:"mode"`    // file mode bits
 	FileIsDir   bool        `json:"isdir"`   // abbreviation for Mode().IsDir()
 }
 
