@@ -36,6 +36,10 @@ func randomFile(size int) (*os.File, error) {
 	}
 
 	_, err = file.Write(buf)
+	if err != nil {
+		return nil, err
+	}
+	_, err = file.Seek(0, io.SeekStart)
 	return file, err
 }
 

@@ -7,7 +7,7 @@ import (
 	"net/http"
 )
 
-// Reader is a byte reader for a remote io.Reader server by a FileServer
+// Reader is a byte reader for a remote io.Reader served by a FileServer
 type Reader struct {
 	file
 }
@@ -53,7 +53,7 @@ func (r *Reader) ReadAt(buf []byte, offset int64) (n int, err error) {
 func (r *Reader) read(buf []byte, offset int64) (n int, err error) {
 	url := fmt.Sprintf("%s/%s", r.baseURL, r.fileID)
 
-	req, err := r.prepareRequest(http.MethodGet, url)
+	req, err := r.prepareRequest(http.MethodGet, url, nil)
 	if err != nil {
 		r.Errorf("Reader.read: Error creating request: %v", err)
 		return 0, err
@@ -84,10 +84,7 @@ func (r *Reader) read(buf []byte, offset int64) (n int, err error) {
 		r.Errorf("Reader.read: Error reading http body: %v", err)
 		return n, err
 	}
-	err = resp.Body.Close()
-	if err != nil {
-		r.Errorf("Reader.read: Error closing body: %v", err)
-	}
+
 	eof := resp.Header.Get(HeaderIsEOF) == "true"
 
 	r.Debugf("Reader.read: Read %d bytes from offset %d in file %s [EOF: %v]", n, offset, r.fileID, eof)

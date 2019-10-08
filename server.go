@@ -19,11 +19,11 @@ var (
 )
 
 const (
-	// MaximumBufferSize is the maximum read size for one HTTP call
+	// MaximumBufferSize is the maximum buffer size for one HTTP call
 	MaximumBufferSize = 10 * 1024 * 1024
 
-	// MaximumBufferSize is the minimum read size for one HTTP call
-	MinumumBufferSize = 10
+	// MaximumBufferSize is the minimum buffer size for one HTTP call
+	MinumumBufferSize = 1
 
 	// HeaderSharedSecret is the name of the header where the shared secret is passed
 	HeaderSharedSecret = "X-SharedSecret"
@@ -54,6 +54,7 @@ type WriterAtCloser interface {
 type FileServer struct {
 	embedLogger
 	sharedSecret      string
+	allowStat         bool // Allow disclosing the information of Stat()
 	discloseFilenames bool // Allow disclosing filename via Stat()
 	server            *http.Server
 	router            *httprouter.Router
@@ -66,6 +67,7 @@ type FileServer struct {
 func NewFileServer(sharedSecret string) (fs *FileServer) {
 	fs = &FileServer{
 		sharedSecret:      sharedSecret,
+		allowStat:         true,
 		discloseFilenames: true,
 		router:            httprouter.New(),
 		readers:           make(map[FileID]ReaderAtCloser),
@@ -88,6 +90,11 @@ func NewFileServer(sharedSecret string) (fs *FileServer) {
 
 	fs.server = &http.Server{Handler: fs.router}
 	return fs
+}
+
+// DiscloseFilenames sets whether the real filenames should be disclosed on Stat()
+func (fs *FileServer) AllowStat(allow bool) {
+	fs.allowStat = allow
 }
 
 // DiscloseFilenames sets whether the real filenames should be disclosed on Stat()
@@ -150,8 +157,11 @@ func (fs *FileServer) checkSecret(subHandler httprouter.Handle) httprouter.Handl
 
 // statFile attempts to stat the opened reader/writer to retrieve file information
 func (fs *FileServer) statFile(fileID FileID) (info FileInfo, err error) {
-	var handle interface{}
+	if !fs.allowStat {
+		return info, ErrUnsupportedOperation
+	}
 
+	var handle interface{}
 	fs.mu.RLock()
 	handle = fs.readers[fileID]
 	if handle == nil {
@@ -211,20 +221,23 @@ func (fs *FileServer) requestOffsetAndLength(resp http.ResponseWriter, req *http
 
 	n, err := fmt.Sscanf(byteRange, "%d-%d", &offset, &length)
 	if err != nil || n != 2 {
-		fs.Debugf("FileServer.readFile: Error reading range header (%s)", byteRange)
+		fs.Debugf("FileServer.readFile: Error parsing range header (%s): %v", byteRange, err)
 		resp.WriteHeader(http.StatusBadRequest)
+		_, _ = resp.Write([]byte("error parsing range header"))
 		return 0, 0, false
 	}
 
 	if offset < 0 {
 		fs.Debugf("FileServer.readFile: Invalid offset (%d)", offset)
 		resp.WriteHeader(http.StatusBadRequest)
+		_, _ = resp.Write([]byte("invalid offset"))
 		return 0, 0, false
 	}
 
 	if length < MinumumBufferSize || length > MaximumBufferSize {
 		fs.Debugf("FileServer.readFile: Invalid buffer length (%d)", length)
 		resp.WriteHeader(http.StatusBadRequest)
+		_, _ = resp.Write([]byte("invalid buffer length"))
 		return 0, 0, false
 	}
 	return offset, length, true
@@ -294,10 +307,11 @@ func (fs *FileServer) writeFile(resp http.ResponseWriter, req *http.Request, par
 	if int64(n) != length {
 		fs.Debugf("FileServer.writeFile: Invalid body length (%d != %d)", n, length)
 		resp.WriteHeader(http.StatusBadRequest)
+		_, _ = resp.Write([]byte("invalid body length"))
 		return
 	}
 
-	n, err = writer.WriteAt(buf, offset)
+	n, err = writer.WriteAt(buf[:length], offset)
 	if err != nil && err != io.EOF {
 		fs.Errorf("FileServer.writeFile: Error writing to writer: %v", err)
 		writeErrorToResponseWriter(resp, err)
@@ -310,9 +324,8 @@ func (fs *FileServer) writeFile(resp http.ResponseWriter, req *http.Request, par
 
 	fs.Debugf("FileServer.writeFile: Wrote %d bytes from offset %d in file %s", n, offset, fileID)
 
+	resp.Header().Set(HeaderRange, fmt.Sprintf("%d-%d", offset, n))
 	resp.WriteHeader(http.StatusNoContent)
-	resp.Header().Set(HeaderRange, fmt.Sprintf("%d-%d", offset, offset+int64(n)))
-
 }
 
 // closeFile handles http requests to close a reader/writer

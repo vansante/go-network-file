@@ -54,8 +54,8 @@ func (f *file) Stat() (fi os.FileInfo, err error) {
 }
 
 // prepareRequest prepares a new HTTP request
-func (f *file) prepareRequest(method, url string) (req *http.Request, err error) {
-	req, err = http.NewRequest(method, url, nil)
+func (f *file) prepareRequest(method, url string, body io.Reader) (req *http.Request, err error) {
+	req, err = http.NewRequest(method, url, body)
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +69,7 @@ func (f *file) stat() (fi FileInfo, err error) {
 
 	f.Debugf("file.stat: Statting file %s", f.fileID)
 
-	req, err := f.prepareRequest(http.MethodOptions, url)
+	req, err := f.prepareRequest(http.MethodOptions, url, nil)
 	if err != nil {
 		f.Errorf("file.stat: Error creating request: %v", err)
 		return fi, err
