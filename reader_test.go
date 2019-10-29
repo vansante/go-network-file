@@ -295,6 +295,7 @@ func TestReaderContextExpires(t *testing.T) {
 	client := newHTTPUnixClient(socket)
 	resp, err := client.Get(fmt.Sprintf("http://server/%s?%s=%s", fileID, GETSharedSecret, secret))
 	assert.NoError(t, err)
+	_ = resp.Body.Close()
 
 	assert.EqualValues(t, http.StatusNotFound, resp.StatusCode)
 }
