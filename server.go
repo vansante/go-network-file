@@ -128,8 +128,16 @@ func (fs *FileServer) ServeFileReader(ctx context.Context, fileID FileID, file i
 	}
 	fs.readers[fileID] = file
 
-	// TODO: Handle ctx.Done()
+	go func() {
+		// Wait for the context to expire, then close the reader if it hasnt been already
+		<-ctx.Done()
 
+		fs.mu.Lock()
+		if fs.closeReader(fileID) {
+			fs.Infof("FileServer.ServeFileReader: Context for file reader expired: %s", fileID)
+		}
+		fs.mu.Unlock()
+	}()
 	return nil
 }
 
@@ -142,7 +150,16 @@ func (fs *FileServer) ServeFileWriter(ctx context.Context, fileID FileID, file i
 	}
 	fs.writers[fileID] = file
 
-	// TODO: Handle ctx.Done()
+	go func() {
+		// Wait for the context to expire, then close the writer if it hasnt been already
+		<-ctx.Done()
+
+		fs.mu.Lock()
+		if fs.closeWriter(fileID) {
+			fs.Infof("FileServer.ServeFileWriter: Context for file writer expired: %s", fileID)
+		}
+		fs.mu.Unlock()
+	}()
 
 	return nil
 }
@@ -369,31 +386,10 @@ func (fs *FileServer) closeFile(resp http.ResponseWriter, req *http.Request, par
 	closed := 0
 
 	fs.mu.Lock()
-	if fs.readers[fileID] != nil {
-		closer, ok := fs.readers[fileID].(io.Closer)
-		if ok {
-			fs.Debugf("FileServer.closeFile: ReaderCloser detected, closing: %s", fileID)
-			err := closer.Close()
-			if err != nil {
-				fs.Errorf("FileServer.closeFile: Error closing reader %s: %v", fileID, err)
-			}
-		}
-
-		delete(fs.readers, fileID)
+	if fs.closeReader(fileID) {
 		closed++
 	}
-
-	if fs.writers[fileID] != nil {
-		closer, ok := fs.writers[fileID].(io.Closer)
-		if ok {
-			fs.Debugf("FileServer.closeFile: WriterCloser detected, closing: %s", fileID)
-			err := closer.Close()
-			if err != nil {
-				fs.Errorf("FileServer.closeFile: Error closing writer %s: %v", fileID, err)
-			}
-		}
-
-		delete(fs.writers, fileID)
+	if fs.closeWriter(fileID) {
 		closed++
 	}
 	fs.mu.Unlock()
@@ -403,4 +399,42 @@ func (fs *FileServer) closeFile(resp http.ResponseWriter, req *http.Request, par
 		return
 	}
 	resp.WriteHeader(http.StatusNoContent)
+}
+
+// closeReader closes and removes a reader, assumes a full lock is held
+func (fs *FileServer) closeReader(fileID FileID) bool {
+	if fs.readers[fileID] == nil {
+		return false
+	}
+
+	closer, ok := fs.readers[fileID].(io.Closer)
+	if ok {
+		fs.Debugf("FileServer.closeReader: Closer detected, closing: %s", fileID)
+		err := closer.Close()
+		if err != nil {
+			fs.Errorf("FileServer.closeReader: Error closing reader %s: %v", fileID, err)
+		}
+	}
+
+	delete(fs.readers, fileID)
+	return true
+}
+
+// closeWriter closes and removes a writer, assumes a full lock is held
+func (fs *FileServer) closeWriter(fileID FileID) bool {
+	if fs.writers[fileID] == nil {
+		return false
+	}
+
+	closer, ok := fs.writers[fileID].(io.Closer)
+	if ok {
+		fs.Debugf("FileServer.closeWriter: Closer detected, closing: %s", fileID)
+		err := closer.Close()
+		if err != nil {
+			fs.Errorf("FileServer.closeWriter: Error closing writer %s: %v", fileID, err)
+		}
+	}
+
+	delete(fs.writers, fileID)
+	return true
 }

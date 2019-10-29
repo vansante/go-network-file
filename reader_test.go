@@ -266,6 +266,39 @@ func TestNormalGetRead(t *testing.T) {
 	assert.EqualValues(t, file, srcBuf)
 }
 
+func TestReaderContextExpires(t *testing.T) {
+	srv := NewFileServer(secret)
+	srv.SetLogger(&testLogger{t})
+
+	socket := newSocketPath()
+	sock, err := net.Listen("unix", socket)
+	assert.NoError(t, err)
+	go func() {
+		err = srv.Serve(sock)
+		assert.EqualValues(t, http.ErrServerClosed, err)
+	}()
+
+	srv.SetLogger(&testLogger{t})
+
+	fileID, err := RandomFileID()
+	assert.NoError(t, err)
+	src, err := randomFile(11325)
+	assert.NoError(t, err)
+
+	// ensure this will expire
+	ctx, cancel := context.WithTimeout(context.Background(), time.Microsecond)
+	defer cancel()
+
+	err = srv.ServeFileReader(ctx, fileID, src)
+	assert.NoError(t, err)
+
+	client := newHTTPUnixClient(socket)
+	resp, err := client.Get(fmt.Sprintf("http://server/%s?%s=%s", fileID, GETSharedSecret, secret))
+	assert.NoError(t, err)
+
+	assert.EqualValues(t, http.StatusNotFound, resp.StatusCode)
+}
+
 func TestReaderBadSecret(t *testing.T) {
 	srv := NewFileServer(secret)
 	srv.SetLogger(&testLogger{t})
