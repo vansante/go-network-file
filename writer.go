@@ -97,6 +97,6 @@ func (w *Writer) write(buf []byte, offset int64) (n int, err error) {
 		return 0, errors.New("unexpected server length")
 	}
 
-	w.Debugf("Writer.write: Wrote %d bytes from offset %d in file %s", offset, len(buf), w.fileID)
+	w.Debugf("Writer.write: Wrote %d bytes from offset %d in file %s", len(buf), offset, w.fileID)
 	return int(servLength), nil
 }

@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/julienschmidt/httprouter"
 )
@@ -28,6 +29,9 @@ const (
 	// HeaderSharedSecret is the name of the header where the shared secret is passed
 	HeaderSharedSecret = "X-SharedSecret"
 
+	// GETSharedSecret is the name of the GET parameter that is also an acceptable way of transferring the shared secret
+	GETSharedSecret = "shared-secret"
+
 	// HeaderIsEOF is the name of the header which indicates whether the EOF (end of file) has been reached
 	HeaderIsEOF = "X-IsEOF"
 
@@ -38,28 +42,18 @@ const (
 	HeaderContentLength = "Content-Length"
 )
 
-// ReaderAtCloser combines the io.ReaderAt and io.Closer interfaces
-type ReaderAtCloser interface {
-	io.ReaderAt
-	io.Closer
-}
-
-// WriterAtCloser combines the io.WriterAt and io.Closer interfaces
-type WriterAtCloser interface {
-	io.WriterAt
-	io.Closer
-}
-
 // FileServer is a HTTP server that serves files as io.Readers or io.Writers
 type FileServer struct {
 	embedLogger
 	sharedSecret      string
 	allowStat         bool // Allow disclosing the information of Stat()
+	allowClose        bool // Allow clients to close a reader/writer
+	allowNormalGET    bool // Allow serving the file via a normal GET request
 	discloseFilenames bool // Allow disclosing filename via Stat()
 	server            *http.Server
 	router            *httprouter.Router
-	readers           map[FileID]ReaderAtCloser
-	writers           map[FileID]WriterAtCloser
+	readers           map[FileID]io.ReaderAt
+	writers           map[FileID]io.WriterAt
 	mu                sync.RWMutex
 }
 
@@ -68,10 +62,12 @@ func NewFileServer(sharedSecret string) (fs *FileServer) {
 	fs = &FileServer{
 		sharedSecret:      sharedSecret,
 		allowStat:         true,
+		allowClose:        true,
+		allowNormalGET:    true,
 		discloseFilenames: true,
 		router:            httprouter.New(),
-		readers:           make(map[FileID]ReaderAtCloser),
-		writers:           make(map[FileID]WriterAtCloser),
+		readers:           make(map[FileID]io.ReaderAt),
+		writers:           make(map[FileID]io.WriterAt),
 	}
 
 	fs.router.OPTIONS("/:fileID", fs.checkSecret(fs.fileOptions))
@@ -92,9 +88,19 @@ func NewFileServer(sharedSecret string) (fs *FileServer) {
 	return fs
 }
 
-// DiscloseFilenames sets whether the real filenames should be disclosed on Stat()
+// AllowStat sets whether it is allowed to stat a file by clients and thus divulge more information about it
 func (fs *FileServer) AllowStat(allow bool) {
 	fs.allowStat = allow
+}
+
+// AllowClose sets whether it is allowed to close a file by clients
+func (fs *FileServer) AllowClose(allow bool) {
+	fs.allowClose = allow
+}
+
+// AllowNormalGET sets whether to allow serving the file via a normal GET request
+func (fs *FileServer) AllowNormalGET(allow bool) {
+	fs.allowNormalGET = allow
 }
 
 // DiscloseFilenames sets whether the real filenames should be disclosed on Stat()
@@ -114,7 +120,7 @@ func (fs *FileServer) Shutdown(ctx context.Context) (err error) {
 }
 
 // ServeFileReader makes the given Reader available under the given FileID
-func (fs *FileServer) ServeFileReader(ctx context.Context, fileID FileID, file ReaderAtCloser) (err error) {
+func (fs *FileServer) ServeFileReader(ctx context.Context, fileID FileID, file io.ReaderAt) (err error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 	if fs.readers[fileID] != nil {
@@ -128,7 +134,7 @@ func (fs *FileServer) ServeFileReader(ctx context.Context, fileID FileID, file R
 }
 
 // ServeFileReader makes the given Writer available under the given FileID
-func (fs *FileServer) ServeFileWriter(ctx context.Context, fileID FileID, file WriterAtCloser) (err error) {
+func (fs *FileServer) ServeFileWriter(ctx context.Context, fileID FileID, file io.WriterAt) (err error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 	if fs.writers[fileID] != nil {
@@ -145,7 +151,11 @@ func (fs *FileServer) ServeFileWriter(ctx context.Context, fileID FileID, file W
 // Returns HTTP 401 otherwise.
 func (fs *FileServer) checkSecret(subHandler httprouter.Handle) httprouter.Handle {
 	return func(resp http.ResponseWriter, req *http.Request, params httprouter.Params) {
-		if req.Header.Get(HeaderSharedSecret) != fs.sharedSecret {
+		secret := req.Header.Get(HeaderSharedSecret)
+		if secret == "" {
+			secret = req.URL.Query().Get(GETSharedSecret)
+		}
+		if secret != fs.sharedSecret {
 			fs.Debugf("FileServer.checkSecret: Invalid secret")
 			resp.WriteHeader(http.StatusUnauthorized)
 			return
@@ -246,10 +256,6 @@ func (fs *FileServer) requestOffsetAndLength(resp http.ResponseWriter, req *http
 // readFile handles read http requests from the remote reader
 func (fs *FileServer) readFile(resp http.ResponseWriter, req *http.Request, params httprouter.Params) {
 	fileID := FileID(params.ByName("fileID"))
-	offset, length, ok := fs.requestOffsetAndLength(resp, req)
-	if !ok {
-		return
-	}
 
 	fs.mu.RLock()
 	reader := fs.readers[fileID]
@@ -257,6 +263,30 @@ func (fs *FileServer) readFile(resp http.ResponseWriter, req *http.Request, para
 
 	if reader == nil {
 		resp.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	if fs.allowNormalGET && req.Header.Get(HeaderRange) == "" {
+		// If the special range header is not set, treat it like a normal GET request
+		readSeeker, ok := reader.(io.ReadSeeker)
+		if ok {
+			fs.Debugf("FileServer.readFile: Serving normal file with seek capability")
+			http.ServeContent(resp, req, string(fileID), time.Now(), readSeeker)
+			return
+		}
+		fs.Debugf("FileServer.readFile: Serving normal file")
+		_, err := io.Copy(resp, &ReaderAtReader{
+			ReaderAt: reader,
+			offset:   0,
+		})
+		if err != nil {
+			fs.Errorf("FileServer.readFile: Error while serving normal file: %v", err)
+		}
+		return
+	}
+
+	offset, length, ok := fs.requestOffsetAndLength(resp, req)
+	if !ok {
 		return
 	}
 
@@ -330,14 +360,23 @@ func (fs *FileServer) writeFile(resp http.ResponseWriter, req *http.Request, par
 
 // closeFile handles http requests to close a reader/writer
 func (fs *FileServer) closeFile(resp http.ResponseWriter, req *http.Request, params httprouter.Params) {
+	if !fs.allowClose {
+		resp.WriteHeader(http.StatusForbidden)
+		return
+	}
+
 	fileID := FileID(params.ByName("fileID"))
 	closed := 0
 
 	fs.mu.Lock()
 	if fs.readers[fileID] != nil {
-		err := fs.readers[fileID].Close()
-		if err != nil {
-			fs.Errorf("FileServer.closeFile: Error closing reader %s: %v", fileID, err)
+		closer, ok := fs.readers[fileID].(io.Closer)
+		if ok {
+			fs.Debugf("FileServer.closeFile: ReaderCloser detected, closing: %s", fileID)
+			err := closer.Close()
+			if err != nil {
+				fs.Errorf("FileServer.closeFile: Error closing reader %s: %v", fileID, err)
+			}
 		}
 
 		delete(fs.readers, fileID)
@@ -345,9 +384,13 @@ func (fs *FileServer) closeFile(resp http.ResponseWriter, req *http.Request, par
 	}
 
 	if fs.writers[fileID] != nil {
-		err := fs.writers[fileID].Close()
-		if err != nil {
-			fs.Errorf("FileServer.closeFile: Error closing writer %s: %v", fileID, err)
+		closer, ok := fs.writers[fileID].(io.Closer)
+		if ok {
+			fs.Debugf("FileServer.closeFile: WriterCloser detected, closing: %s", fileID)
+			err := closer.Close()
+			if err != nil {
+				fs.Errorf("FileServer.closeFile: Error closing writer %s: %v", fileID, err)
+			}
 		}
 
 		delete(fs.writers, fileID)

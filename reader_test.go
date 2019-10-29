@@ -229,6 +229,43 @@ func TestReaderSeek(t *testing.T) {
 	assert.NoError(t, srv.Shutdown(context.Background()))
 }
 
+func TestNormalGetRead(t *testing.T) {
+	srv := NewFileServer(secret)
+	srv.SetLogger(&testLogger{t})
+
+	socket := newSocketPath()
+	sock, err := net.Listen("unix", socket)
+	assert.NoError(t, err)
+	go func() {
+		err = srv.Serve(sock)
+		assert.EqualValues(t, http.ErrServerClosed, err)
+	}()
+
+	srv.SetLogger(&testLogger{t})
+
+	fileID, err := RandomFileID()
+	assert.NoError(t, err)
+	src, err := randomFile(11325)
+	assert.NoError(t, err)
+
+	err = srv.ServeFileReader(context.Background(), fileID, src)
+	assert.NoError(t, err)
+
+	client := newHTTPUnixClient(socket)
+	resp, err := client.Get(fmt.Sprintf("http://server/%s?%s=%s", fileID, GETSharedSecret, secret))
+	assert.NoError(t, err)
+
+	_, err = src.Seek(0, io.SeekStart)
+	assert.NoError(t, err)
+	srcBuf, err := ioutil.ReadAll(src)
+	assert.NoError(t, err)
+
+	file, err := ioutil.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+
+	assert.EqualValues(t, file, srcBuf)
+}
+
 func TestReaderBadSecret(t *testing.T) {
 	srv := NewFileServer(secret)
 	srv.SetLogger(&testLogger{t})
