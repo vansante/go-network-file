@@ -2,6 +2,8 @@ package networkfile
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,6 +43,17 @@ const (
 	// HeaderContentLength is the header used for sending the file size
 	HeaderContentLength = "Content-Length"
 )
+
+// RandomSharedSecret returns a random shared secret
+func RandomSharedSecret(bytes int) (string, error) {
+	buf := make([]byte, bytes)
+	_, err := rand.Read(buf)
+	if err != nil {
+		return "", err
+	}
+
+	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
 
 // FileServer is a HTTP server that serves files as io.Readers or io.Writers
 type FileServer struct {

@@ -38,6 +38,11 @@ func NewCustomClientReader(httpClient *http.Client, baseURL, sharedSecret string
 	}
 }
 
+// FullReadURL returns the URL at which the file can be downloaded completely via a normal GET request without this reader
+func (r *Reader) FullReadURL() string {
+	return fmt.Sprintf("%s/%s?%s=%s", r.baseURL, r.fileID, GETSharedSecret, r.sharedSecret)
+}
+
 // Read reads from the remote file
 func (r *Reader) Read(buf []byte) (n int, err error) {
 	n, err = r.read(buf, r.offset)
