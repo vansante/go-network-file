@@ -252,7 +252,8 @@ func TestNormalGetRead(t *testing.T) {
 	assert.NoError(t, err)
 
 	client := newHTTPUnixClient(socket)
-	resp, err := client.Get(fmt.Sprintf("http://server/%s?%s=%s", fileID, GETSharedSecret, secret))
+	rdr := NewCustomClientReader(client, "http://server", secret, fileID)
+	resp, err := client.Get(rdr.FullReadURL())
 	assert.NoError(t, err)
 
 	_, err = src.Seek(0, io.SeekStart)

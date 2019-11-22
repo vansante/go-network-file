@@ -44,6 +44,16 @@ func (f *file) Seek(offset int64, whence int) (int64, error) {
 	return f.offset, nil
 }
 
+// FileID returns the fileID
+func (f *file) FileID() FileID {
+	return f.fileID
+}
+
+// SharedSecret returns the shared secret
+func (f *file) SharedSecret() string {
+	return f.sharedSecret
+}
+
 // Stat returns the remote file information
 func (f *file) Stat() (fi os.FileInfo, err error) {
 	info, err := f.stat()
