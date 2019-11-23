@@ -13,8 +13,6 @@ import (
 	"net/http"
 	"sync"
 	"time"
-
-	"github.com/julienschmidt/httprouter"
 )
 
 var (
@@ -64,7 +62,6 @@ type FileServer struct {
 	allowNormalGET    bool // Allow serving the file via a normal GET request
 	discloseFilenames bool // Allow disclosing filename via Stat()
 	server            *http.Server
-	router            *httprouter.Router
 	readers           map[FileID]io.ReaderAt
 	writers           map[FileID]io.WriterAt
 	mu                sync.RWMutex
@@ -78,26 +75,11 @@ func NewFileServer(sharedSecret string) (fs *FileServer) {
 		allowClose:        true,
 		allowNormalGET:    true,
 		discloseFilenames: true,
-		router:            httprouter.New(),
 		readers:           make(map[FileID]io.ReaderAt),
 		writers:           make(map[FileID]io.WriterAt),
 	}
 
-	fs.router.OPTIONS("/:fileID", fs.checkSecret(fs.fileOptions))
-	fs.router.GET("/:fileID", fs.checkSecret(fs.readFile))
-	fs.router.PATCH("/:fileID", fs.checkSecret(fs.writeFile))
-	fs.router.DELETE("/:fileID", fs.checkSecret(fs.closeFile))
-
-	fs.router.NotFound = http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
-		fs.Debugf("FileServer: %s %s [404 not found]", req.Method, req.URL.String())
-		resp.WriteHeader(http.StatusNotFound)
-	})
-	fs.router.MethodNotAllowed = http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
-		fs.Debugf("FileServer: %s %s [405 method not allowed]", req.Method, req.URL.String())
-		resp.WriteHeader(http.StatusMethodNotAllowed)
-	})
-
-	fs.server = &http.Server{Handler: fs.router}
+	fs.server = &http.Server{Handler: fs}
 	return fs
 }
 
@@ -130,6 +112,41 @@ func (fs *FileServer) Serve(socket net.Listener) (err error) {
 // The socket needs to be closed manually
 func (fs *FileServer) Shutdown(ctx context.Context) (err error) {
 	return fs.server.Shutdown(ctx)
+}
+
+// ServeHTTP is called for each incoming http request and handles the routing and sharedSecret check
+func (fs *FileServer) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
+	secret := req.Header.Get(HeaderSharedSecret)
+	if secret == "" {
+		secret = req.URL.Query().Get(GETSharedSecret)
+	}
+	if secret != fs.sharedSecret {
+		fs.Debugf("FileServer.ServeHTTP: Invalid secret")
+		resp.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	// The expected URL format is /:fileID here.
+	url := req.URL.Path
+	if url[:1] != "/" {
+		resp.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	fileID := FileID(url[1:])
+	switch req.Method {
+	case http.MethodOptions:
+		fs.handleFileOptions(resp, fileID)
+	case http.MethodGet:
+		fs.handleReadFile(resp, req, fileID)
+	case http.MethodPatch:
+		fs.handleWriteFile(resp, req, fileID)
+	case http.MethodDelete:
+		fs.handleCloseFile(resp, fileID)
+	default:
+		fs.Debugf("FileServer.ServeHTTP: Invalid method %s", req.Method)
+		resp.WriteHeader(http.StatusMethodNotAllowed)
+	}
 }
 
 // ServeFileReader makes the given Reader available under the given FileID
@@ -177,24 +194,6 @@ func (fs *FileServer) ServeFileWriter(ctx context.Context, fileID FileID, file i
 	return nil
 }
 
-// checkSecret is a HTTP middleware function that checks if the call was done with the right shared secret
-// Returns HTTP 401 otherwise.
-func (fs *FileServer) checkSecret(subHandler httprouter.Handle) httprouter.Handle {
-	return func(resp http.ResponseWriter, req *http.Request, params httprouter.Params) {
-		secret := req.Header.Get(HeaderSharedSecret)
-		if secret == "" {
-			secret = req.URL.Query().Get(GETSharedSecret)
-		}
-		if secret != fs.sharedSecret {
-			fs.Debugf("FileServer.checkSecret: Invalid secret")
-			resp.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-
-		subHandler(resp, req, params)
-	}
-}
-
 // statFile attempts to stat the opened reader/writer to retrieve file information
 func (fs *FileServer) statFile(fileID FileID) (info FileInfo, err error) {
 	if !fs.allowStat {
@@ -230,12 +229,11 @@ func (fs *FileServer) statFile(fileID FileID) (info FileInfo, err error) {
 	return info, nil
 }
 
-// fileOptions handles stat requests from the remote reader/writer
-func (fs *FileServer) fileOptions(resp http.ResponseWriter, req *http.Request, params httprouter.Params) {
-	fileID := FileID(params.ByName("fileID"))
+// handleFileOptions handles stat requests from the remote reader/writer
+func (fs *FileServer) handleFileOptions(resp http.ResponseWriter, fileID FileID) {
 	info, err := fs.statFile(fileID)
 	if err != nil {
-		fs.Debugf("FileServer.statFile: Error statting reader: %v", err)
+		fs.Debugf("FileServer.handleFileOptions: Error statting reader: %v", err)
 		writeErrorToResponseWriter(resp, err)
 		return
 	}
@@ -245,13 +243,13 @@ func (fs *FileServer) fileOptions(resp http.ResponseWriter, req *http.Request, p
 
 	data, err := json.Marshal(&info)
 	if err != nil {
-		fs.Errorf("FileServer.statFile: Error marshalling json: %v", err)
+		fs.Errorf("FileServer.handleFileOptions: Error marshalling json: %v", err)
 		resp.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 	_, err = resp.Write(data)
 	if err != nil {
-		fs.Errorf("FileServer.statFile: Error writing json: %v", err)
+		fs.Errorf("FileServer.handleFileOptions: Error writing json: %v", err)
 	}
 }
 
@@ -261,21 +259,21 @@ func (fs *FileServer) requestOffsetAndLength(resp http.ResponseWriter, req *http
 
 	matches, err := fmt.Sscanf(byteRange, "%d-%d", &offset, &length)
 	if err != nil || matches != 2 {
-		fs.Debugf("FileServer.readFile: Error parsing range header (%s): %v", byteRange, err)
+		fs.Debugf("FileServer.requestOffsetAndLength: Error parsing range header (%s): %v", byteRange, err)
 		resp.WriteHeader(http.StatusBadRequest)
 		_, _ = resp.Write([]byte("error parsing range header"))
 		return 0, 0, false
 	}
 
 	if offset < 0 {
-		fs.Debugf("FileServer.readFile: Invalid offset (%d)", offset)
+		fs.Debugf("FileServer.requestOffsetAndLength: Invalid offset (%d)", offset)
 		resp.WriteHeader(http.StatusBadRequest)
 		_, _ = resp.Write([]byte("invalid offset"))
 		return 0, 0, false
 	}
 
 	if length < MinumumBufferSize || length > MaximumBufferSize {
-		fs.Debugf("FileServer.readFile: Invalid buffer length (%d)", length)
+		fs.Debugf("FileServer.requestOffsetAndLength: Invalid buffer length (%d)", length)
 		resp.WriteHeader(http.StatusBadRequest)
 		_, _ = resp.Write([]byte("invalid buffer length"))
 		return 0, 0, false
@@ -283,10 +281,8 @@ func (fs *FileServer) requestOffsetAndLength(resp http.ResponseWriter, req *http
 	return offset, length, true
 }
 
-// readFile handles read http requests from the remote reader
-func (fs *FileServer) readFile(resp http.ResponseWriter, req *http.Request, params httprouter.Params) {
-	fileID := FileID(params.ByName("fileID"))
-
+// handleReadFile handles read http requests from the remote reader
+func (fs *FileServer) handleReadFile(resp http.ResponseWriter, req *http.Request, fileID FileID) {
 	fs.mu.RLock()
 	reader := fs.readers[fileID]
 	fs.mu.RUnlock()
@@ -300,17 +296,17 @@ func (fs *FileServer) readFile(resp http.ResponseWriter, req *http.Request, para
 		// If the special range header is not set, treat it like a normal GET request
 		readSeeker, ok := reader.(io.ReadSeeker)
 		if ok {
-			fs.Debugf("FileServer.readFile: Serving normal file with seek capability")
+			fs.Debugf("FileServer.handleReadFile: Serving normal file with seek capability")
 			http.ServeContent(resp, req, string(fileID), time.Now(), readSeeker)
 			return
 		}
-		fs.Debugf("FileServer.readFile: Serving normal file")
+		fs.Debugf("FileServer.handleReadFile: Serving normal file")
 		_, err := io.Copy(resp, &ReaderAtReader{
 			ReaderAt: reader,
 			offset:   0,
 		})
 		if err != nil {
-			fs.Errorf("FileServer.readFile: Error while serving normal file: %v", err)
+			fs.Errorf("FileServer.handleReadFile: Error while serving normal file: %v", err)
 		}
 		return
 	}
@@ -331,18 +327,17 @@ func (fs *FileServer) readFile(resp http.ResponseWriter, req *http.Request, para
 	resp.Header().Set(HeaderIsEOF, fmt.Sprintf("%v", eof))
 	resp.Header().Set(HeaderRange, fmt.Sprintf("%d-%d", offset, n))
 
-	fs.Debugf("FileServer.readFile: Read %d bytes from offset %d from file %s [EOF: %v]", n, offset, fileID, eof)
+	fs.Debugf("FileServer.handleReadFile: Read %d bytes from offset %d from file %s [EOF: %v]", n, offset, fileID, eof)
 
 	resp.WriteHeader(http.StatusPartialContent)
 	_, err = resp.Write(buf[:n])
 	if err != nil {
-		fs.Errorf("FileServer.readFile: Error writing buffer to response: %v", err)
+		fs.Errorf("FileServer.handleReadFile: Error writing buffer to response: %v", err)
 	}
 }
 
-// writeFile handles write http requests from the remote writer
-func (fs *FileServer) writeFile(resp http.ResponseWriter, req *http.Request, params httprouter.Params) {
-	fileID := FileID(params.ByName("fileID"))
+// handleWriteFile handles write http requests from the remote writer
+func (fs *FileServer) handleWriteFile(resp http.ResponseWriter, req *http.Request, fileID FileID) {
 	offset, length, ok := fs.requestOffsetAndLength(resp, req)
 	if !ok {
 		return
@@ -360,12 +355,12 @@ func (fs *FileServer) writeFile(resp http.ResponseWriter, req *http.Request, par
 	buf := make([]byte, length+1)
 	n, err := req.Body.Read(buf)
 	if err != nil && err != io.EOF {
-		fs.Errorf("FileServer.writeFile: Error reading request body: %v", err)
+		fs.Errorf("FileServer.handleWriteFile: Error reading request body: %v", err)
 		writeErrorToResponseWriter(resp, err)
 		return
 	}
 	if int64(n) != length {
-		fs.Debugf("FileServer.writeFile: Invalid body length (%d != %d)", n, length)
+		fs.Debugf("FileServer.handleWriteFile: Invalid body length (%d != %d)", n, length)
 		resp.WriteHeader(http.StatusBadRequest)
 		_, _ = resp.Write([]byte("invalid body length"))
 		return
@@ -373,29 +368,27 @@ func (fs *FileServer) writeFile(resp http.ResponseWriter, req *http.Request, par
 
 	n, err = writer.WriteAt(buf[:length], offset)
 	if err != nil && err != io.EOF {
-		fs.Errorf("FileServer.writeFile: Error writing to writer: %v", err)
+		fs.Errorf("FileServer.handleWriteFile: Error writing to writer: %v", err)
 		writeErrorToResponseWriter(resp, err)
 		return
 	}
 
 	if int64(n) != length {
-		log.Panicf("FileServer.writeFile: Logic error, should not happen (%d != %d)", n, length)
+		log.Panicf("FileServer.handleWriteFile: Logic error, should not happen (%d != %d)", n, length)
 	}
 
-	fs.Debugf("FileServer.writeFile: Wrote %d bytes from offset %d in file %s", n, offset, fileID)
+	fs.Debugf("FileServer.handleWriteFile: Wrote %d bytes from offset %d in file %s", n, offset, fileID)
 
 	resp.Header().Set(HeaderRange, fmt.Sprintf("%d-%d", offset, n))
 	resp.WriteHeader(http.StatusNoContent)
 }
 
-// closeFile handles http requests to close a reader/writer
-func (fs *FileServer) closeFile(resp http.ResponseWriter, req *http.Request, params httprouter.Params) {
+// handleCloseFile handles http requests to close a reader/writer
+func (fs *FileServer) handleCloseFile(resp http.ResponseWriter, fileID FileID) {
 	if !fs.allowClose {
 		resp.WriteHeader(http.StatusForbidden)
 		return
 	}
-
-	fileID := FileID(params.ByName("fileID"))
 	closed := 0
 
 	fs.mu.Lock()
