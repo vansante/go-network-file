@@ -13,8 +13,6 @@ import (
 	"net/http"
 	"sync"
 	"time"
-
-	"github.com/julienschmidt/httprouter"
 )
 
 var (
@@ -64,7 +62,6 @@ type FileServer struct {
 	allowNormalGET    bool // Allow serving the file via a normal GET request
 	discloseFilenames bool // Allow disclosing filename via Stat()
 	server            *http.Server
-	router            *httprouter.Router
 	readers           map[FileID]io.ReaderAt
 	writers           map[FileID]io.WriterAt
 	mu                sync.RWMutex
@@ -78,26 +75,11 @@ func NewFileServer(sharedSecret string) (fs *FileServer) {
 		allowClose:        true,
 		allowNormalGET:    true,
 		discloseFilenames: true,
-		router:            httprouter.New(),
 		readers:           make(map[FileID]io.ReaderAt),
 		writers:           make(map[FileID]io.WriterAt),
 	}
 
-	fs.router.OPTIONS("/:fileID", fs.checkSecret(fs.fileOptions))
-	fs.router.GET("/:fileID", fs.checkSecret(fs.readFile))
-	fs.router.PATCH("/:fileID", fs.checkSecret(fs.writeFile))
-	fs.router.DELETE("/:fileID", fs.checkSecret(fs.closeFile))
-
-	fs.router.NotFound = http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
-		fs.Debugf("FileServer: %s %s [404 not found]", req.Method, req.URL.String())
-		resp.WriteHeader(http.StatusNotFound)
-	})
-	fs.router.MethodNotAllowed = http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
-		fs.Debugf("FileServer: %s %s [405 method not allowed]", req.Method, req.URL.String())
-		resp.WriteHeader(http.StatusMethodNotAllowed)
-	})
-
-	fs.server = &http.Server{Handler: fs.router}
+	fs.server = &http.Server{Handler: fs}
 	return fs
 }
 
@@ -130,6 +112,41 @@ func (fs *FileServer) Serve(socket net.Listener) (err error) {
 // The socket needs to be closed manually
 func (fs *FileServer) Shutdown(ctx context.Context) (err error) {
 	return fs.server.Shutdown(ctx)
+}
+
+// ServeHTTP is called for each incoming http request and handles the routing and sharedSecret check
+func (fs *FileServer) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
+	secret := req.Header.Get(HeaderSharedSecret)
+	if secret == "" {
+		secret = req.URL.Query().Get(GETSharedSecret)
+	}
+	if secret != fs.sharedSecret {
+		fs.Debugf("FileServer.ServeHTTP: Invalid secret")
+		resp.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	// The expected URL format is /:fileID here.
+	url := req.URL.Path
+	if url[:1] != "/" {
+		resp.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	fileID := FileID(url[1:])
+	switch req.Method {
+	case http.MethodOptions:
+		fs.fileOptions(resp, req, fileID)
+	case http.MethodGet:
+		fs.readFile(resp, req, fileID)
+	case http.MethodPatch:
+		fs.writeFile(resp, req, fileID)
+	case http.MethodDelete:
+		fs.closeFile(resp, req, fileID)
+	default:
+		fs.Debugf("FileServer.ServeHTTP: Invalid method %s", req.Method)
+		resp.WriteHeader(http.StatusMethodNotAllowed)
+	}
 }
 
 // ServeFileReader makes the given Reader available under the given FileID
@@ -177,24 +194,6 @@ func (fs *FileServer) ServeFileWriter(ctx context.Context, fileID FileID, file i
 	return nil
 }
 
-// checkSecret is a HTTP middleware function that checks if the call was done with the right shared secret
-// Returns HTTP 401 otherwise.
-func (fs *FileServer) checkSecret(subHandler httprouter.Handle) httprouter.Handle {
-	return func(resp http.ResponseWriter, req *http.Request, params httprouter.Params) {
-		secret := req.Header.Get(HeaderSharedSecret)
-		if secret == "" {
-			secret = req.URL.Query().Get(GETSharedSecret)
-		}
-		if secret != fs.sharedSecret {
-			fs.Debugf("FileServer.checkSecret: Invalid secret")
-			resp.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-
-		subHandler(resp, req, params)
-	}
-}
-
 // statFile attempts to stat the opened reader/writer to retrieve file information
 func (fs *FileServer) statFile(fileID FileID) (info FileInfo, err error) {
 	if !fs.allowStat {
@@ -231,8 +230,7 @@ func (fs *FileServer) statFile(fileID FileID) (info FileInfo, err error) {
 }
 
 // fileOptions handles stat requests from the remote reader/writer
-func (fs *FileServer) fileOptions(resp http.ResponseWriter, req *http.Request, params httprouter.Params) {
-	fileID := FileID(params.ByName("fileID"))
+func (fs *FileServer) fileOptions(resp http.ResponseWriter, req *http.Request, fileID FileID) {
 	info, err := fs.statFile(fileID)
 	if err != nil {
 		fs.Debugf("FileServer.statFile: Error statting reader: %v", err)
@@ -284,9 +282,7 @@ func (fs *FileServer) requestOffsetAndLength(resp http.ResponseWriter, req *http
 }
 
 // readFile handles read http requests from the remote reader
-func (fs *FileServer) readFile(resp http.ResponseWriter, req *http.Request, params httprouter.Params) {
-	fileID := FileID(params.ByName("fileID"))
-
+func (fs *FileServer) readFile(resp http.ResponseWriter, req *http.Request, fileID FileID) {
 	fs.mu.RLock()
 	reader := fs.readers[fileID]
 	fs.mu.RUnlock()
@@ -341,8 +337,7 @@ func (fs *FileServer) readFile(resp http.ResponseWriter, req *http.Request, para
 }
 
 // writeFile handles write http requests from the remote writer
-func (fs *FileServer) writeFile(resp http.ResponseWriter, req *http.Request, params httprouter.Params) {
-	fileID := FileID(params.ByName("fileID"))
+func (fs *FileServer) writeFile(resp http.ResponseWriter, req *http.Request, fileID FileID) {
 	offset, length, ok := fs.requestOffsetAndLength(resp, req)
 	if !ok {
 		return
@@ -389,13 +384,11 @@ func (fs *FileServer) writeFile(resp http.ResponseWriter, req *http.Request, par
 }
 
 // closeFile handles http requests to close a reader/writer
-func (fs *FileServer) closeFile(resp http.ResponseWriter, req *http.Request, params httprouter.Params) {
+func (fs *FileServer) closeFile(resp http.ResponseWriter, req *http.Request, fileID FileID) {
 	if !fs.allowClose {
 		resp.WriteHeader(http.StatusForbidden)
 		return
 	}
-
-	fileID := FileID(params.ByName("fileID"))
 	closed := 0
 
 	fs.mu.Lock()
