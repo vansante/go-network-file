@@ -62,6 +62,7 @@ type FileServer struct {
 	allowStat         bool // Allow disclosing the information of Stat()
 	allowClose        bool // Allow clients to close a reader/writer
 	allowNormalGET    bool // Allow serving the file via a normal GET request
+	allowPUT          bool // Allow writing the file via a PUT requests
 	discloseFilenames bool // Allow disclosing filename via Stat()
 	writeBufferSize   int
 	mu                sync.RWMutex
@@ -76,6 +77,7 @@ func NewFileServer(sharedSecret string) (fs *FileServer) {
 		allowStat:         true,
 		allowClose:        true,
 		allowNormalGET:    true,
+		allowPUT:          true,
 		discloseFilenames: true,
 		writeBufferSize:   DefaultWriteBufferSize,
 	}
@@ -97,6 +99,11 @@ func (fs *FileServer) AllowClose(allow bool) {
 // AllowNormalGET sets whether to allow serving the file via a normal GET request
 func (fs *FileServer) AllowNormalGET(allow bool) {
 	fs.allowNormalGET = allow
+}
+
+// AllowPUT sets whether to allow writing to a file using a single raw PUT request
+func (fs *FileServer) AllowPUT(allow bool) {
+	fs.allowPUT = allow
 }
 
 // DiscloseFilenames sets whether the real filenames should be disclosed on Stat()
@@ -150,6 +157,8 @@ func (fs *FileServer) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 		fs.handleReadFile(resp, req, fileID)
 	case http.MethodPatch:
 		fs.handleWriteFile(resp, req, fileID)
+	case http.MethodPut:
+		fs.handleFullWriteFile(resp, req, fileID)
 	case http.MethodDelete:
 		fs.handleCloseFile(resp, fileID)
 	default:
@@ -403,7 +412,7 @@ func (fs *FileServer) handleWriteFile(resp http.ResponseWriter, req *http.Reques
 	}
 
 	if totalRead != written {
-		fs.Debugf("FileServer.handleWriteFile: Bytes written != bytes read  (%d != %d)", totalRead, written)
+		fs.Errorf("FileServer.handleWriteFile: Bytes written != bytes read  (%d != %d)", totalRead, written)
 		resp.WriteHeader(http.StatusInternalServerError)
 		_, _ = resp.Write([]byte("invalid bytes written"))
 		return
@@ -412,6 +421,35 @@ func (fs *FileServer) handleWriteFile(resp http.ResponseWriter, req *http.Reques
 	fs.Debugf("FileServer.handleWriteFile: Wrote %d bytes from offset %d in file %s", written, offset, fileID)
 
 	resp.Header().Set(HeaderRange, fmt.Sprintf("%d-%d", offset, written))
+	resp.WriteHeader(http.StatusNoContent)
+}
+
+func (fs *FileServer) handleFullWriteFile(resp http.ResponseWriter, req *http.Request, fileID FileID) {
+	if !fs.allowPUT {
+		resp.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	fs.mu.RLock()
+	writerAt := fs.writers[fileID]
+	fs.mu.RUnlock()
+
+	writer, ok := writerAt.(io.Writer)
+	if !ok {
+		// Wrap it in a struct so we can use it as a normal writer
+		writer = &WriterAtWriter{
+			WriterAt: writerAt,
+		}
+	}
+
+	n, err := io.CopyBuffer(writer, req.Body, make([]byte, fs.writeBufferSize))
+	if err != nil && !errors.Is(err, io.EOF) {
+		fs.Errorf("FileServer.handleFullWriteFile: Error writing to writer: %v", err)
+		writeErrorToResponseWriter(resp, err)
+		return
+	}
+
+	fs.Debugf("FileServer.handleFullWriteFile: Wrote %d bytes", n)
 	resp.WriteHeader(http.StatusNoContent)
 }
 
