@@ -161,6 +161,7 @@ func TestPutRequest(t *testing.T) {
 	assert.NoError(t, err)
 	resp, err := client.Do(req)
 	assert.NoError(t, err)
+	_ = resp.Body.Close()
 
 	// Reopen the src, because the http client closes it
 	src, err = os.Open(srcPath)
