@@ -106,6 +106,9 @@ func (fs *FileServer) DiscloseFilenames(secret bool) {
 
 // SetWriteBufferSize sets the write buffer size
 func (fs *FileServer) SetWriteBufferSize(size int) {
+	if size < 1 {
+		panic("setting a write buffer size under 1 is impossible")
+	}
 	fs.writeBufferSize = size
 }
 
