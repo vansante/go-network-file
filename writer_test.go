@@ -102,7 +102,7 @@ func TestWriterCopyFileLargeBuffer(t *testing.T) {
 
 	n, err := io.CopyBuffer(wrtr, src, make([]byte, 1_577_777))
 	assert.NoError(t, err)
-	assert.EqualValues(t, 1_577_777, n)
+	assert.EqualValues(t, 17_177_717, n)
 
 	_, err = dst.Seek(0, io.SeekStart)
 	assert.NoError(t, err)
