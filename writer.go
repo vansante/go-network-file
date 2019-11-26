@@ -39,6 +39,11 @@ func NewCustomClientWriter(httpClient *http.Client, baseURL, sharedSecret string
 	}
 }
 
+// PutURL returns the URL at which the file can be PUT in a single request
+func (w *Writer) PutURL() string {
+	return fmt.Sprintf("%s/%s?%s=%s", w.baseURL, w.fileID, GETSharedSecret, w.sharedSecret)
+}
+
 // Write writes to the remote file
 func (w *Writer) Write(buf []byte) (n int, err error) {
 	n, err = w.write(buf, w.offset)
