@@ -66,7 +66,6 @@ func TestWriterCopyFile(t *testing.T) {
 	assert.NoError(t, srv.Shutdown(context.Background()))
 }
 
-
 func TestWriterCopyFileLargeBuffer(t *testing.T) {
 	srv := NewFileServer(secret)
 	srv.SetLogger(&testLogger{t})
@@ -94,16 +93,16 @@ func TestWriterCopyFileLargeBuffer(t *testing.T) {
 	wrtr := NewCustomClientWriter(newHTTPUnixClient(socket), "http://server", secret, fileID)
 	wrtr.SetLogger(&testLogger{t})
 
-	src, err := randomFile(117_777)
+	src, err := randomFile(17_177_717)
 	assert.NoError(t, err)
 	defer func() {
 		_ = src.Close()
 		_ = os.Remove(src.Name())
 	}()
 
-	n, err := io.CopyBuffer(wrtr, src, make([]byte, 11_777))
+	n, err := io.CopyBuffer(wrtr, src, make([]byte, 1_577_777))
 	assert.NoError(t, err)
-	assert.EqualValues(t, 117, n)
+	assert.EqualValues(t, 1_577_777, n)
 
 	_, err = dst.Seek(0, io.SeekStart)
 	assert.NoError(t, err)
