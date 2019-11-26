@@ -64,6 +64,8 @@ type FileServer struct {
 	allowNormalGET    bool // Allow serving the file via a normal GET request
 	allowPUT          bool // Allow writing the file via a PUT requests
 	discloseFilenames bool // Allow disclosing filename via Stat()
+	closeReaders      bool // Attempt to detect io.Closer and close the io.ReaderAt.
+	closeWriters      bool // Attempt to detect io.Closer and close the io.WriterAt.
 	writeBufferSize   int
 	mu                sync.RWMutex
 }
@@ -79,6 +81,8 @@ func NewFileServer(sharedSecret string) (fs *FileServer) {
 		allowNormalGET:    true,
 		allowPUT:          true,
 		discloseFilenames: true,
+		closeReaders:      true,
+		closeWriters:      true,
 		writeBufferSize:   DefaultWriteBufferSize,
 	}
 
@@ -109,6 +113,12 @@ func (fs *FileServer) AllowPUT(allow bool) {
 // DiscloseFilenames sets whether the real filenames should be disclosed on Stat()
 func (fs *FileServer) DiscloseFilenames(secret bool) {
 	fs.discloseFilenames = secret
+}
+
+// CloseIO allows setting whether the server should attempt to close io.ReaderAts and io.WriterAts once its done with them
+func (fs *FileServer) CloseIO(closeReaders, closeWriters bool) {
+	fs.closeReaders = closeReaders
+	fs.closeWriters = closeWriters
 }
 
 // SetWriteBufferSize sets the write buffer size
@@ -483,12 +493,14 @@ func (fs *FileServer) closeReader(fileID FileID) bool {
 		return false
 	}
 
-	closer, ok := fs.readers[fileID].(io.Closer)
-	if ok {
-		fs.Debugf("FileServer.closeReader: Closer detected, closing: %s", fileID)
-		err := closer.Close()
-		if err != nil {
-			fs.Errorf("FileServer.closeReader: Error closing reader %s: %v", fileID, err)
+	if fs.closeReaders {
+		closer, ok := fs.readers[fileID].(io.Closer)
+		if ok {
+			fs.Debugf("FileServer.closeReader: Closer detected, closing: %s", fileID)
+			err := closer.Close()
+			if err != nil {
+				fs.Errorf("FileServer.closeReader: Error closing reader %s: %v", fileID, err)
+			}
 		}
 	}
 
@@ -502,12 +514,14 @@ func (fs *FileServer) closeWriter(fileID FileID) bool {
 		return false
 	}
 
-	closer, ok := fs.writers[fileID].(io.Closer)
-	if ok {
-		fs.Debugf("FileServer.closeWriter: Closer detected, closing: %s", fileID)
-		err := closer.Close()
-		if err != nil {
-			fs.Errorf("FileServer.closeWriter: Error closing writer %s: %v", fileID, err)
+	if fs.closeWriters {
+		closer, ok := fs.writers[fileID].(io.Closer)
+		if ok {
+			fs.Debugf("FileServer.closeWriter: Closer detected, closing: %s", fileID)
+			err := closer.Close()
+			if err != nil {
+				fs.Errorf("FileServer.closeWriter: Error closing writer %s: %v", fileID, err)
+			}
 		}
 	}
 
