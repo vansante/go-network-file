@@ -353,6 +353,7 @@ func (fs *FileServer) handleReadFile(resp http.ResponseWriter, req *http.Request
 		// If the special range header is not set, treat it like a normal GET request
 		reader.Lock()
 		http.ServeContent(resp, req, string(fileID), time.Now(), reader)
+		reader.offset = -1 // We don't know what the offset is set to, so set it to unknown
 		reader.Unlock()
 		return
 	}
@@ -364,10 +365,13 @@ func (fs *FileServer) handleReadFile(resp http.ResponseWriter, req *http.Request
 
 	reader.Lock()
 	if reader.offset != offset {
-		_, err := reader.Seek(offset, io.SeekStart)
+		fs.Debugf("FileServer.handleReadFile: Seeking to read position %d from %d", offset, reader.offset)
+
+		n, err := reader.Seek(offset, io.SeekStart)
+		reader.offset = n
 		if err != nil {
-			fs.Errorf("FileServer.handleReadFile: Error seeking to offset %d: %v", offset, err)
 			reader.Unlock()
+			fs.Errorf("FileServer.handleReadFile: Error seeking to offset %d: %v", offset, err)
 			writeErrorToResponseWriter(resp, err)
 			return
 		}
@@ -375,7 +379,7 @@ func (fs *FileServer) handleReadFile(resp http.ResponseWriter, req *http.Request
 
 	buf := make([]byte, length)
 	n, err := reader.Read(buf)
-	reader.offset += int64(n) + 1
+	reader.offset += int64(n)
 	reader.Unlock()
 	if err != nil && err != io.EOF {
 		writeErrorToResponseWriter(resp, err)
@@ -430,6 +434,7 @@ func (fs *FileServer) handleWriteFile(resp http.ResponseWriter, req *http.Reques
 
 		writer.Lock()
 		if writer.offset != offset+written {
+			fs.Debugf("FileServer.handleWriteFile: Seeking to write position %d", offset+written)
 			n, err := writer.Seek(offset+written, io.SeekStart)
 			writer.offset = n
 			if err != nil {
@@ -441,7 +446,7 @@ func (fs *FileServer) handleWriteFile(resp http.ResponseWriter, req *http.Reques
 		}
 
 		n, writeErr := writer.Write(buf[:read])
-		writer.offset += int64(n) + 1
+		writer.offset += int64(n)
 		writer.Unlock()
 		if writeErr != nil && !errors.Is(writeErr, io.EOF) {
 			fs.Errorf("FileServer.handleWriteFile: Error writing to writer: %v", writeErr)
@@ -490,17 +495,17 @@ func (fs *FileServer) handleFullWriteFile(resp http.ResponseWriter, req *http.Re
 	fs.mu.RUnlock()
 
 	writer.Lock()
-	_, err := writer.Seek(0, io.SeekStart)
+	n, err := writer.Seek(0, io.SeekStart)
+	writer.offset = n
 	if err != nil {
 		writer.Unlock()
 		fs.Errorf("FileServer.handleFullWriteFile: Error seeking writer to start: %v", err)
 		writeErrorToResponseWriter(resp, err)
 		return
 	}
-	writer.offset = 0
 
-	n, err := io.CopyBuffer(writer, req.Body, make([]byte, fs.writeBufferSize))
-	writer.offset = n + 1
+	n, err = io.CopyBuffer(writer, req.Body, make([]byte, fs.writeBufferSize))
+	writer.offset = n
 	writer.Unlock()
 	if err != nil && !errors.Is(err, io.EOF) {
 		fs.Errorf("FileServer.handleFullWriteFile: Error writing to writer: %v", err)
