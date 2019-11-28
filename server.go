@@ -61,7 +61,7 @@ type FileServer struct {
 	writers           map[FileID]io.WriterAt
 	allowStat         bool // Allow disclosing the information of Stat()
 	allowClose        bool // Allow clients to close a reader/writer
-	allowNormalGET    bool // Allow serving the file via a normal GET request
+	allowFullGET      bool // Allow serving the file via a normal GET request
 	allowPUT          bool // Allow writing the file via a PUT requests
 	discloseFilenames bool // Allow disclosing filename via Stat()
 	closeReaders      bool // Attempt to detect io.Closer and close the io.ReaderAt.
@@ -78,7 +78,7 @@ func NewFileServer(sharedSecret string) (fs *FileServer) {
 		writers:           make(map[FileID]io.WriterAt),
 		allowStat:         true,
 		allowClose:        true,
-		allowNormalGET:    true,
+		allowFullGET:      true,
 		allowPUT:          true,
 		discloseFilenames: true,
 		closeReaders:      true,
@@ -100,9 +100,9 @@ func (fs *FileServer) AllowClose(allow bool) {
 	fs.allowClose = allow
 }
 
-// AllowNormalGET sets whether to allow serving the file via a normal GET request
-func (fs *FileServer) AllowNormalGET(allow bool) {
-	fs.allowNormalGET = allow
+// AllowFullGET sets whether to allow serving the file via a normal GET request
+func (fs *FileServer) AllowFullGET(allow bool) {
+	fs.allowFullGET = allow
 }
 
 // AllowPUT sets whether to allow writing to a file using a single raw PUT request
@@ -138,6 +138,11 @@ func (fs *FileServer) Serve(socket net.Listener) (err error) {
 // The socket needs to be closed manually
 func (fs *FileServer) Shutdown(ctx context.Context) (err error) {
 	return fs.server.Shutdown(ctx)
+}
+
+// SharedSecret returns the shared secret
+func (fs *FileServer) SharedSecret() string {
+	return fs.sharedSecret
 }
 
 // ServeHTTP is called for each incoming http request and handles the routing and sharedSecret check
@@ -320,21 +325,21 @@ func (fs *FileServer) handleReadFile(resp http.ResponseWriter, req *http.Request
 		return
 	}
 
-	if fs.allowNormalGET && req.Header.Get(HeaderRange) == "" {
+	if fs.allowFullGET && req.Header.Get(HeaderRange) == "" {
 		// If the special range header is not set, treat it like a normal GET request
 		readSeeker, ok := reader.(io.ReadSeeker)
 		if ok {
-			fs.Debugf("FileServer.handleReadFile: Serving normal file with seek capability")
+			fs.Debugf("FileServer.handleReadFile: Serving full file with seek capability")
 			http.ServeContent(resp, req, string(fileID), time.Now(), readSeeker)
 			return
 		}
-		fs.Debugf("FileServer.handleReadFile: Serving normal file")
+		fs.Debugf("FileServer.handleReadFile: Serving full file")
 		_, err := io.Copy(resp, &ReaderAtReader{
 			ReaderAt: reader,
 			offset:   0,
 		})
 		if err != nil {
-			fs.Errorf("FileServer.handleReadFile: Error while serving normal file: %v", err)
+			fs.Errorf("FileServer.handleReadFile: Error while serving full file: %v", err)
 		}
 		return
 	}
