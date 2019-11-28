@@ -197,12 +197,19 @@ func (fs *FileServer) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 }
 
 // ServeFileReader makes the given Reader available under the given FileID
-func (fs *FileServer) ServeFileReader(ctx context.Context, fileID FileID, file io.ReadSeeker) (err error) {
+func (fs *FileServer) ServeFileReader(ctx context.Context, fileID FileID, file io.ReadSeeker) error {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 	if fs.readers[fileID] != nil {
 		return ErrFileIDTaken
 	}
+
+	// Make sure we start at offset 0
+	_, err := file.Seek(0, io.SeekStart)
+	if err != nil {
+		return err
+	}
+
 	fs.readers[fileID] = &reader{
 		ReadSeeker: file,
 	}
@@ -221,12 +228,19 @@ func (fs *FileServer) ServeFileReader(ctx context.Context, fileID FileID, file i
 }
 
 // ServeFileReader makes the given Writer available under the given FileID
-func (fs *FileServer) ServeFileWriter(ctx context.Context, fileID FileID, file io.WriteSeeker) (err error) {
+func (fs *FileServer) ServeFileWriter(ctx context.Context, fileID FileID, file io.WriteSeeker) error {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 	if fs.writers[fileID] != nil {
 		return ErrFileIDTaken
 	}
+
+	// Make sure we start at offset 0
+	_, err := file.Seek(0, io.SeekStart)
+	if err != nil {
+		return err
+	}
+
 	fs.writers[fileID] = &writer{
 		WriteSeeker: file,
 	}
@@ -352,6 +366,17 @@ func (fs *FileServer) handleReadFile(resp http.ResponseWriter, req *http.Request
 	if fs.allowFullGET && req.Header.Get(HeaderRange) == "" {
 		// If the special range header is not set, treat it like a normal GET request
 		reader.Lock()
+		if reader.offset != 0 {
+			n, err := reader.Seek(0, io.SeekStart)
+			reader.offset = n
+			if err != nil {
+				reader.Unlock()
+				fs.Errorf("FileServer.handleReadFile: Error seeking to start: %v", err)
+				writeErrorToResponseWriter(resp, err)
+				return
+			}
+		}
+		// Serve the file with the Go http handler to support partial requests
 		http.ServeContent(resp, req, string(fileID), time.Now(), reader)
 		reader.offset = -1 // We don't know what the offset is set to, so set it to unknown
 		reader.Unlock()
