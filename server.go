@@ -52,13 +52,27 @@ func RandomSharedSecret(bytes int) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
+type reader struct {
+	io.ReadSeeker
+	sync.Mutex
+
+	offset int64
+}
+
+type writer struct {
+	io.WriteSeeker
+	sync.Mutex
+
+	offset int64
+}
+
 // FileServer is a HTTP server that serves files as io.Readers or io.Writers
 type FileServer struct {
 	embedLogger
 	sharedSecret      string
 	server            *http.Server
-	readers           map[FileID]io.ReaderAt
-	writers           map[FileID]io.WriterAt
+	readers           map[FileID]*reader
+	writers           map[FileID]*writer
 	allowStat         bool // Allow disclosing the information of Stat()
 	allowClose        bool // Allow clients to close a reader/writer
 	allowFullGET      bool // Allow serving the file via a normal GET request
@@ -74,8 +88,8 @@ type FileServer struct {
 func NewFileServer(sharedSecret string) (fs *FileServer) {
 	fs = &FileServer{
 		sharedSecret:      sharedSecret,
-		readers:           make(map[FileID]io.ReaderAt),
-		writers:           make(map[FileID]io.WriterAt),
+		readers:           make(map[FileID]*reader),
+		writers:           make(map[FileID]*writer),
 		allowStat:         true,
 		allowClose:        true,
 		allowFullGET:      true,
@@ -183,13 +197,22 @@ func (fs *FileServer) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 }
 
 // ServeFileReader makes the given Reader available under the given FileID
-func (fs *FileServer) ServeFileReader(ctx context.Context, fileID FileID, file io.ReaderAt) (err error) {
+func (fs *FileServer) ServeFileReader(ctx context.Context, fileID FileID, file io.ReadSeeker) error {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 	if fs.readers[fileID] != nil {
 		return ErrFileIDTaken
 	}
-	fs.readers[fileID] = file
+
+	// Make sure we start at offset 0
+	_, err := file.Seek(0, io.SeekStart)
+	if err != nil {
+		return err
+	}
+
+	fs.readers[fileID] = &reader{
+		ReadSeeker: file,
+	}
 
 	go func() {
 		// Wait for the context to expire, then close the reader if it hasnt been already
@@ -205,13 +228,22 @@ func (fs *FileServer) ServeFileReader(ctx context.Context, fileID FileID, file i
 }
 
 // ServeFileReader makes the given Writer available under the given FileID
-func (fs *FileServer) ServeFileWriter(ctx context.Context, fileID FileID, file io.WriterAt) (err error) {
+func (fs *FileServer) ServeFileWriter(ctx context.Context, fileID FileID, file io.WriteSeeker) error {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 	if fs.writers[fileID] != nil {
 		return ErrFileIDTaken
 	}
-	fs.writers[fileID] = file
+
+	// Make sure we start at offset 0
+	_, err := file.Seek(0, io.SeekStart)
+	if err != nil {
+		return err
+	}
+
+	fs.writers[fileID] = &writer{
+		WriteSeeker: file,
+	}
 
 	go func() {
 		// Wait for the context to expire, then close the writer if it hasnt been already
@@ -235,9 +267,15 @@ func (fs *FileServer) statFile(fileID FileID) (info FileInfo, err error) {
 
 	var handle interface{}
 	fs.mu.RLock()
-	handle = fs.readers[fileID]
+	reader := fs.readers[fileID]
+	if reader != nil {
+		handle = reader.ReadSeeker
+	}
 	if handle == nil {
-		handle = fs.writers[fileID]
+		writer := fs.writers[fileID]
+		if writer != nil {
+			handle = writer.WriteSeeker
+		}
 	}
 	fs.mu.RUnlock()
 
@@ -327,20 +365,21 @@ func (fs *FileServer) handleReadFile(resp http.ResponseWriter, req *http.Request
 
 	if fs.allowFullGET && req.Header.Get(HeaderRange) == "" {
 		// If the special range header is not set, treat it like a normal GET request
-		readSeeker, ok := reader.(io.ReadSeeker)
-		if ok {
-			fs.Debugf("FileServer.handleReadFile: Serving full file with seek capability")
-			http.ServeContent(resp, req, string(fileID), time.Now(), readSeeker)
-			return
+		reader.Lock()
+		if reader.offset != 0 {
+			n, err := reader.Seek(0, io.SeekStart)
+			reader.offset = n
+			if err != nil {
+				reader.Unlock()
+				fs.Errorf("FileServer.handleReadFile: Error seeking to start: %v", err)
+				writeErrorToResponseWriter(resp, err)
+				return
+			}
 		}
-		fs.Debugf("FileServer.handleReadFile: Serving full file")
-		_, err := io.Copy(resp, &ReaderAtReader{
-			ReaderAt: reader,
-			offset:   0,
-		})
-		if err != nil {
-			fs.Errorf("FileServer.handleReadFile: Error while serving full file: %v", err)
-		}
+		// Serve the file with the Go http handler to support partial requests
+		http.ServeContent(resp, req, string(fileID), time.Now(), reader)
+		reader.offset = -1 // We don't know what the offset is set to, so set it to unknown
+		reader.Unlock()
 		return
 	}
 
@@ -349,8 +388,24 @@ func (fs *FileServer) handleReadFile(resp http.ResponseWriter, req *http.Request
 		return
 	}
 
+	reader.Lock()
+	if reader.offset != offset {
+		fs.Debugf("FileServer.handleReadFile: Seeking to read position %d from %d", offset, reader.offset)
+
+		n, err := reader.Seek(offset, io.SeekStart)
+		reader.offset = n
+		if err != nil {
+			reader.Unlock()
+			fs.Errorf("FileServer.handleReadFile: Error seeking to offset %d: %v", offset, err)
+			writeErrorToResponseWriter(resp, err)
+			return
+		}
+	}
+
 	buf := make([]byte, length)
-	n, err := reader.ReadAt(buf, offset)
+	n, err := reader.Read(buf)
+	reader.offset += int64(n)
+	reader.Unlock()
 	if err != nil && err != io.EOF {
 		writeErrorToResponseWriter(resp, err)
 		return
@@ -402,7 +457,22 @@ func (fs *FileServer) handleWriteFile(resp http.ResponseWriter, req *http.Reques
 			}
 		}
 
-		n, writeErr := writer.WriteAt(buf[:read], offset+written)
+		writer.Lock()
+		if writer.offset != offset+written {
+			fs.Debugf("FileServer.handleWriteFile: Seeking to write position %d", offset+written)
+			n, err := writer.Seek(offset+written, io.SeekStart)
+			writer.offset = n
+			if err != nil {
+				writer.Unlock()
+				fs.Errorf("FileServer.handleWriteFile: Error seeking to write position %d: %v", offset+written, err)
+				writeErrorToResponseWriter(resp, err)
+				return
+			}
+		}
+
+		n, writeErr := writer.Write(buf[:read])
+		writer.offset += int64(n)
+		writer.Unlock()
 		if writeErr != nil && !errors.Is(writeErr, io.EOF) {
 			fs.Errorf("FileServer.handleWriteFile: Error writing to writer: %v", writeErr)
 			writeErrorToResponseWriter(resp, writeErr)
@@ -446,18 +516,22 @@ func (fs *FileServer) handleFullWriteFile(resp http.ResponseWriter, req *http.Re
 	}
 
 	fs.mu.RLock()
-	writerAt := fs.writers[fileID]
+	writer := fs.writers[fileID]
 	fs.mu.RUnlock()
 
-	writer, ok := writerAt.(io.Writer)
-	if !ok {
-		// Wrap it in a struct so we can use it as a normal writer
-		writer = &WriterAtWriter{
-			WriterAt: writerAt,
-		}
+	writer.Lock()
+	n, err := writer.Seek(0, io.SeekStart)
+	writer.offset = n
+	if err != nil {
+		writer.Unlock()
+		fs.Errorf("FileServer.handleFullWriteFile: Error seeking writer to start: %v", err)
+		writeErrorToResponseWriter(resp, err)
+		return
 	}
 
-	n, err := io.CopyBuffer(writer, req.Body, make([]byte, fs.writeBufferSize))
+	n, err = io.CopyBuffer(writer, req.Body, make([]byte, fs.writeBufferSize))
+	writer.offset = n
+	writer.Unlock()
 	if err != nil && !errors.Is(err, io.EOF) {
 		fs.Errorf("FileServer.handleFullWriteFile: Error writing to writer: %v", err)
 		writeErrorToResponseWriter(resp, err)
@@ -499,7 +573,7 @@ func (fs *FileServer) closeReader(fileID FileID) bool {
 	}
 
 	if fs.closeReaders {
-		closer, ok := fs.readers[fileID].(io.Closer)
+		closer, ok := fs.readers[fileID].ReadSeeker.(io.Closer)
 		if ok {
 			fs.Debugf("FileServer.closeReader: Closer detected, closing: %s", fileID)
 			err := closer.Close()
@@ -520,7 +594,7 @@ func (fs *FileServer) closeWriter(fileID FileID) bool {
 	}
 
 	if fs.closeWriters {
-		closer, ok := fs.writers[fileID].(io.Closer)
+		closer, ok := fs.writers[fileID].WriteSeeker.(io.Closer)
 		if ok {
 			fs.Debugf("FileServer.closeWriter: Closer detected, closing: %s", fileID)
 			err := closer.Close()
