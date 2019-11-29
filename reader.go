@@ -89,11 +89,7 @@ func (r *Reader) read(buf []byte, offset int64) (n int, err error) {
 		r.Errorf("Reader.read: Error reading http body: %v", err)
 		return n, err
 	}
-
-	eof := resp.Header.Get(HeaderIsEOF) == "true"
-
-	r.Debugf("Reader.read: Read %d bytes from offset %d in file %s [EOF: %v]", n, offset, r.fileID, eof)
-	if eof {
+	if n == 0 {
 		return n, io.EOF
 	}
 	return n, nil

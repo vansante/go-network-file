@@ -37,6 +37,9 @@ const (
 	// HeaderContentLength is the header used for sending the file size
 	HeaderContentLength = "Content-Length"
 
+	// DefaultReadBufferSize is the default buffer size used while reading
+	DefaultReadBufferSize = 256 * 1024
+
 	// DefaultWriteBufferSize is the default buffer size used while writing
 	DefaultWriteBufferSize = 256 * 1024
 )
@@ -80,6 +83,7 @@ type FileServer struct {
 	discloseFilenames bool // Allow disclosing filename via Stat()
 	closeReaders      bool // Attempt to detect io.Closer and close the io.ReaderAt.
 	closeWriters      bool // Attempt to detect io.Closer and close the io.WriterAt.
+	readBufferSize    int
 	writeBufferSize   int
 	mu                sync.RWMutex
 }
@@ -97,6 +101,7 @@ func NewFileServer(sharedSecret string) (fs *FileServer) {
 		discloseFilenames: true,
 		closeReaders:      true,
 		closeWriters:      true,
+		readBufferSize:    DefaultReadBufferSize,
 		writeBufferSize:   DefaultWriteBufferSize,
 	}
 
@@ -133,6 +138,14 @@ func (fs *FileServer) DiscloseFilenames(secret bool) {
 func (fs *FileServer) CloseIO(closeReaders, closeWriters bool) {
 	fs.closeReaders = closeReaders
 	fs.closeWriters = closeWriters
+}
+
+// SetReadBufferSize sets the write buffer size
+func (fs *FileServer) SetReadBufferSize(size int) {
+	if size < 1 {
+		panic("setting a read buffer size under 1 is impossible")
+	}
+	fs.readBufferSize = size
 }
 
 // SetWriteBufferSize sets the write buffer size
@@ -402,26 +415,17 @@ func (fs *FileServer) handleReadFile(resp http.ResponseWriter, req *http.Request
 		}
 	}
 
-	buf := make([]byte, length)
-	n, err := reader.Read(buf)
-	reader.offset += int64(n)
+	resp.WriteHeader(http.StatusPartialContent)
+
+	n, err := io.CopyBuffer(resp, io.LimitReader(reader, length), make([]byte, fs.readBufferSize))
+	reader.offset += n
 	reader.Unlock()
 	if err != nil && err != io.EOF {
 		writeErrorToResponseWriter(resp, err)
 		return
 	}
 
-	eof := err == io.EOF
-	resp.Header().Set(HeaderIsEOF, fmt.Sprintf("%v", eof))
-	resp.Header().Set(HeaderRange, fmt.Sprintf("%d-%d", offset, n))
-
-	fs.Debugf("FileServer.handleReadFile: Read %d bytes from offset %d from file %s [EOF: %v]", n, offset, fileID, eof)
-
-	resp.WriteHeader(http.StatusPartialContent)
-	_, err = resp.Write(buf[:n])
-	if err != nil {
-		fs.Errorf("FileServer.handleReadFile: Error writing buffer to response: %v", err)
-	}
+	fs.Debugf("FileServer.handleReadFile: Read %d bytes from offset %d from file %s [%v]", n, offset, fileID, err)
 }
 
 // handleWriteFile handles write http requests from the remote writer
