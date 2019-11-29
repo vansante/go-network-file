@@ -440,72 +440,37 @@ func (fs *FileServer) handleWriteFile(resp http.ResponseWriter, req *http.Reques
 		return
 	}
 
-	var totalRead, written int64
-	buf := make([]byte, fs.writeBufferSize)
-	for totalRead < length {
-		var read int64
-		for read < int64(len(buf)) {
-			n, readErr := req.Body.Read(buf[read:])
-			read += int64(n)
-			if readErr != nil {
-				if !errors.Is(readErr, io.EOF) {
-					fs.Errorf("FileServer.handleWriteFile: Error reading request body: %v", readErr)
-					writeErrorToResponseWriter(resp, readErr)
-					return
-				}
-				break
-			}
-		}
-
-		writer.Lock()
-		if writer.offset != offset+written {
-			fs.Debugf("FileServer.handleWriteFile: Seeking to write position %d", offset+written)
-			n, err := writer.Seek(offset+written, io.SeekStart)
-			writer.offset = n
-			if err != nil {
-				writer.Unlock()
-				fs.Errorf("FileServer.handleWriteFile: Error seeking to write position %d: %v", offset+written, err)
-				writeErrorToResponseWriter(resp, err)
-				return
-			}
-		}
-
-		n, writeErr := writer.Write(buf[:read])
-		writer.offset += int64(n)
-		writer.Unlock()
-		if writeErr != nil && !errors.Is(writeErr, io.EOF) {
-			fs.Errorf("FileServer.handleWriteFile: Error writing to writer: %v", writeErr)
-			writeErrorToResponseWriter(resp, writeErr)
+	writer.Lock()
+	if writer.offset != offset {
+		fs.Debugf("FileServer.handleWriteFile: Seeking to write position %d", offset)
+		n, err := writer.Seek(offset, io.SeekStart)
+		writer.offset = n
+		if err != nil {
+			writer.Unlock()
+			fs.Errorf("FileServer.handleWriteFile: Error seeking to write position %d: %v", offset, err)
+			writeErrorToResponseWriter(resp, err)
 			return
 		}
-
-		fs.Debugf("FileServer.handleWriteFile: Wrote %d bytes at offset %d", read, offset+written)
-
-		written += int64(n)
-		totalRead += read
-
-		if errors.Is(writeErr, io.EOF) {
-			break
-		}
+	}
+	n, err := io.CopyBuffer(writer, req.Body, make([]byte, fs.writeBufferSize))
+	writer.offset += n
+	writer.Unlock()
+	if err != nil {
+		fs.Errorf("FileServer.handleWriteFile: Error writing to writer: %v", err)
+		writeErrorToResponseWriter(resp, err)
+		return
 	}
 
-	if totalRead != length {
-		fs.Debugf("FileServer.handleWriteFile: Invalid body length (%d != %d)", totalRead, length)
+	if n != length {
+		fs.Debugf("FileServer.handleWriteFile: Invalid body length (%d != %d)", n, length)
 		resp.WriteHeader(http.StatusBadRequest)
 		_, _ = resp.Write([]byte("invalid body length"))
 		return
 	}
 
-	if totalRead != written {
-		fs.Errorf("FileServer.handleWriteFile: Bytes written != bytes read  (%d != %d)", totalRead, written)
-		resp.WriteHeader(http.StatusInternalServerError)
-		_, _ = resp.Write([]byte("invalid bytes written"))
-		return
-	}
+	fs.Debugf("FileServer.handleWriteFile: Wrote %d bytes from offset %d in file %s", n, offset, fileID)
 
-	fs.Debugf("FileServer.handleWriteFile: Wrote %d bytes from offset %d in file %s", written, offset, fileID)
-
-	resp.Header().Set(HeaderRange, fmt.Sprintf("%d-%d", offset, written))
+	resp.Header().Set(HeaderRange, fmt.Sprintf("%d-%d", offset, n))
 	resp.WriteHeader(http.StatusNoContent)
 }
 
@@ -532,7 +497,7 @@ func (fs *FileServer) handleFullWriteFile(resp http.ResponseWriter, req *http.Re
 	n, err = io.CopyBuffer(writer, req.Body, make([]byte, fs.writeBufferSize))
 	writer.offset = n
 	writer.Unlock()
-	if err != nil && !errors.Is(err, io.EOF) {
+	if err != nil {
 		fs.Errorf("FileServer.handleFullWriteFile: Error writing to writer: %v", err)
 		writeErrorToResponseWriter(resp, err)
 		return
