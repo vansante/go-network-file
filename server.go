@@ -383,7 +383,7 @@ func (fs *FileServer) handleReadFile(resp http.ResponseWriter, req *http.Request
 
 	n, err := io.CopyBuffer(resp, io.LimitReader(rdr, length), make([]byte, fs.readBufferSize))
 	if err != nil && err != io.EOF {
-		fs.Errorf("FileServer.handleReadFile: Error copying to response %s: %v", fileID, err)
+		fs.Debugf("FileServer.handleReadFile: Error copying to response %s: %v", fileID, err)
 		return
 	}
 
