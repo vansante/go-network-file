@@ -28,9 +28,6 @@ const (
 	// GETSharedSecret is the name of the GET parameter that is also an acceptable way of transferring the shared secret
 	GETSharedSecret = "shared-secret"
 
-	// HeaderIsEOF is the name of the header which indicates whether the EOF (end of file) has been reached
-	HeaderIsEOF = "X-IsEOF"
-
 	// HeaderRange is the header used for sending ranges
 	HeaderRange = "X-Range"
 
@@ -55,27 +52,13 @@ func RandomSharedSecret(bytes int) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
-type reader struct {
-	io.ReadSeeker
-	sync.Mutex
-
-	offset int64
-}
-
-type writer struct {
-	io.WriteSeeker
-	sync.Mutex
-
-	offset int64
-}
-
 // FileServer is a HTTP server that serves files as io.Readers or io.Writers
 type FileServer struct {
 	embedLogger
 	sharedSecret      string
 	server            *http.Server
-	readers           map[FileID]*reader
-	writers           map[FileID]*writer
+	readers           map[FileID]*concurrentReadSeeker
+	writers           map[FileID]*concurrentWriteSeeker
 	allowStat         bool // Allow disclosing the information of Stat()
 	allowClose        bool // Allow clients to close a reader/writer
 	allowFullGET      bool // Allow serving the file via a normal GET request
@@ -92,8 +75,8 @@ type FileServer struct {
 func NewFileServer(sharedSecret string) (fs *FileServer) {
 	fs = &FileServer{
 		sharedSecret:      sharedSecret,
-		readers:           make(map[FileID]*reader),
-		writers:           make(map[FileID]*writer),
+		readers:           make(map[FileID]*concurrentReadSeeker),
+		writers:           make(map[FileID]*concurrentWriteSeeker),
 		allowStat:         true,
 		allowClose:        true,
 		allowFullGET:      true,
@@ -223,8 +206,8 @@ func (fs *FileServer) ServeFileReader(ctx context.Context, fileID FileID, file i
 		return err
 	}
 
-	fs.readers[fileID] = &reader{
-		ReadSeeker: file,
+	fs.readers[fileID] = &concurrentReadSeeker{
+		src: file,
 	}
 
 	go func() {
@@ -254,8 +237,8 @@ func (fs *FileServer) ServeFileWriter(ctx context.Context, fileID FileID, file i
 		return err
 	}
 
-	fs.writers[fileID] = &writer{
-		WriteSeeker: file,
+	fs.writers[fileID] = &concurrentWriteSeeker{
+		src: file,
 	}
 
 	go func() {
@@ -282,12 +265,12 @@ func (fs *FileServer) statFile(fileID FileID) (info FileInfo, err error) {
 	fs.mu.RLock()
 	reader := fs.readers[fileID]
 	if reader != nil {
-		handle = reader.ReadSeeker
+		handle = reader.src
 	}
 	if handle == nil {
 		writer := fs.writers[fileID]
 		if writer != nil {
-			handle = writer.WriteSeeker
+			handle = writer.src
 		}
 	}
 	fs.mu.RUnlock()
@@ -378,21 +361,8 @@ func (fs *FileServer) handleReadFile(resp http.ResponseWriter, req *http.Request
 
 	if fs.allowFullGET && req.Header.Get(HeaderRange) == "" {
 		// If the special range header is not set, treat it like a normal GET request
-		reader.Lock()
-		if reader.offset != 0 {
-			n, err := reader.Seek(0, io.SeekStart)
-			reader.offset = n
-			if err != nil {
-				reader.Unlock()
-				fs.Errorf("FileServer.handleReadFile: Error seeking to start: %v", err)
-				writeErrorToResponseWriter(resp, err)
-				return
-			}
-		}
 		// Serve the file with the Go http handler to support partial requests
-		http.ServeContent(resp, req, string(fileID), time.Now(), reader)
-		reader.offset = -1 // We don't know what the offset is set to, so set it to unknown
-		reader.Unlock()
+		http.ServeContent(resp, req, string(fileID), time.Now(), reader.New())
 		return
 	}
 
@@ -401,25 +371,17 @@ func (fs *FileServer) handleReadFile(resp http.ResponseWriter, req *http.Request
 		return
 	}
 
-	reader.Lock()
-	if reader.offset != offset {
-		fs.Debugf("FileServer.handleReadFile: Seeking to read position %d from %d", offset, reader.offset)
-
-		n, err := reader.Seek(offset, io.SeekStart)
-		reader.offset = n
-		if err != nil {
-			reader.Unlock()
-			fs.Errorf("FileServer.handleReadFile: Error seeking to offset %d: %v", offset, err)
-			writeErrorToResponseWriter(resp, err)
-			return
-		}
-	}
-
 	resp.WriteHeader(http.StatusPartialContent)
 
-	n, err := io.CopyBuffer(resp, io.LimitReader(reader, length), make([]byte, fs.readBufferSize))
-	reader.offset += n
-	reader.Unlock()
+	rdr := reader.New()
+	_, err := rdr.Seek(offset, io.SeekStart)
+	if err != nil {
+		fs.Errorf("FileServer.handleReadFile: Error seeking to offset %d: %v", offset, err)
+		writeErrorToResponseWriter(resp, err)
+		return
+	}
+
+	n, err := io.CopyBuffer(resp, io.LimitReader(rdr, length), make([]byte, fs.readBufferSize))
 	if err != nil && err != io.EOF {
 		writeErrorToResponseWriter(resp, err)
 		return
@@ -444,21 +406,16 @@ func (fs *FileServer) handleWriteFile(resp http.ResponseWriter, req *http.Reques
 		return
 	}
 
-	writer.Lock()
-	if writer.offset != offset {
-		fs.Debugf("FileServer.handleWriteFile: Seeking to write position %d", offset)
-		n, err := writer.Seek(offset, io.SeekStart)
-		writer.offset = n
-		if err != nil {
-			writer.Unlock()
-			fs.Errorf("FileServer.handleWriteFile: Error seeking to write position %d: %v", offset, err)
-			writeErrorToResponseWriter(resp, err)
-			return
-		}
+	wrtr := writer.New()
+	fs.Debugf("FileServer.handleWriteFile: Seeking to write position %d", offset)
+	_, err := wrtr.Seek(offset, io.SeekStart)
+	if err != nil {
+		fs.Errorf("FileServer.handleWriteFile: Error seeking to write position %d: %v", offset, err)
+		writeErrorToResponseWriter(resp, err)
+		return
 	}
-	n, err := io.CopyBuffer(writer, req.Body, make([]byte, fs.writeBufferSize))
-	writer.offset += n
-	writer.Unlock()
+
+	n, err := io.CopyBuffer(wrtr, req.Body, make([]byte, fs.writeBufferSize))
 	if err != nil {
 		fs.Errorf("FileServer.handleWriteFile: Error writing to writer: %v", err)
 		writeErrorToResponseWriter(resp, err)
@@ -488,19 +445,9 @@ func (fs *FileServer) handleFullWriteFile(resp http.ResponseWriter, req *http.Re
 	writer := fs.writers[fileID]
 	fs.mu.RUnlock()
 
-	writer.Lock()
-	n, err := writer.Seek(0, io.SeekStart)
-	writer.offset = n
-	if err != nil {
-		writer.Unlock()
-		fs.Errorf("FileServer.handleFullWriteFile: Error seeking writer to start: %v", err)
-		writeErrorToResponseWriter(resp, err)
-		return
-	}
+	wrtr := writer.New()
 
-	n, err = io.CopyBuffer(writer, req.Body, make([]byte, fs.writeBufferSize))
-	writer.offset = n
-	writer.Unlock()
+	n, err := io.CopyBuffer(wrtr, req.Body, make([]byte, fs.writeBufferSize))
 	if err != nil {
 		fs.Errorf("FileServer.handleFullWriteFile: Error writing to writer: %v", err)
 		writeErrorToResponseWriter(resp, err)
@@ -542,7 +489,7 @@ func (fs *FileServer) closeReader(fileID FileID) bool {
 	}
 
 	if fs.closeReaders {
-		closer, ok := fs.readers[fileID].ReadSeeker.(io.Closer)
+		closer, ok := fs.readers[fileID].src.(io.Closer)
 		if ok {
 			fs.Debugf("FileServer.closeReader: Closer detected, closing: %s", fileID)
 			err := closer.Close()
@@ -563,7 +510,7 @@ func (fs *FileServer) closeWriter(fileID FileID) bool {
 	}
 
 	if fs.closeWriters {
-		closer, ok := fs.writers[fileID].WriteSeeker.(io.Closer)
+		closer, ok := fs.writers[fileID].src.(io.Closer)
 		if ok {
 			fs.Debugf("FileServer.closeWriter: Closer detected, closing: %s", fileID)
 			err := closer.Close()
