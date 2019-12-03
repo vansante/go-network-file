@@ -383,7 +383,7 @@ func (fs *FileServer) handleReadFile(resp http.ResponseWriter, req *http.Request
 
 	n, err := io.CopyBuffer(resp, io.LimitReader(rdr, length), make([]byte, fs.readBufferSize))
 	if err != nil && err != io.EOF {
-		writeErrorToResponseWriter(resp, err)
+		fs.Errorf("FileServer.handleReadFile: Error copying to response %s: %v", fileID, err)
 		return
 	}
 
@@ -447,7 +447,7 @@ func (fs *FileServer) handleFullWriteFile(resp http.ResponseWriter, req *http.Re
 
 	n, err := io.CopyBuffer(writer.New(), req.Body, make([]byte, fs.writeBufferSize))
 	if err != nil {
-		fs.Errorf("FileServer.handleFullWriteFile: Error writing to writer: %v", err)
+		fs.Errorf("FileServer.handleFullWriteFile: Error writing to writer %s: %v", fileID, err)
 		writeErrorToResponseWriter(resp, err)
 		return
 	}
