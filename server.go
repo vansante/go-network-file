@@ -445,9 +445,7 @@ func (fs *FileServer) handleFullWriteFile(resp http.ResponseWriter, req *http.Re
 	writer := fs.writers[fileID]
 	fs.mu.RUnlock()
 
-	wrtr := writer.New()
-
-	n, err := io.CopyBuffer(wrtr, req.Body, make([]byte, fs.writeBufferSize))
+	n, err := io.CopyBuffer(writer.New(), req.Body, make([]byte, fs.writeBufferSize))
 	if err != nil {
 		fs.Errorf("FileServer.handleFullWriteFile: Error writing to writer: %v", err)
 		writeErrorToResponseWriter(resp, err)
