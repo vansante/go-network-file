@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -229,7 +230,7 @@ func TestReaderSeek(t *testing.T) {
 	assert.NoError(t, srv.Shutdown(context.Background()))
 }
 
-func TestNormalGetRead(t *testing.T) {
+func TestFullGetRead(t *testing.T) {
 	srv := NewFileServer(secret)
 	srv.SetLogger(&testLogger{t})
 
@@ -265,6 +266,49 @@ func TestNormalGetRead(t *testing.T) {
 	_ = resp.Body.Close()
 
 	assert.EqualValues(t, file, srcBuf)
+}
+
+func TestMultipleFullGetRead(t *testing.T) {
+	srv := NewFileServer(secret)
+	srv.SetLogger(&testLogger{t})
+
+	socket := newSocketPath()
+	sock, err := net.Listen("unix", socket)
+	assert.NoError(t, err)
+	go func() {
+		err = srv.Serve(sock)
+		assert.EqualValues(t, http.ErrServerClosed, err)
+	}()
+
+	srv.SetLogger(&testLogger{t})
+
+	fileID, err := RandomFileID()
+	assert.NoError(t, err)
+	src, err := randomFile(113025)
+	assert.NoError(t, err)
+
+	err = srv.ServeFileReader(context.Background(), fileID, src)
+	assert.NoError(t, err)
+
+	wg := sync.WaitGroup{}
+	wg.Add(100)
+	for i := 0; i < 100; i++ {
+		go func() {
+			client := newHTTPUnixClient(socket)
+			rdr := NewCustomClientReader(client, "http://server", secret, fileID)
+			resp, err := client.Get(rdr.FullReadURL())
+			assert.NoError(t, err)
+			if err != nil {
+				return
+			}
+
+			_, err = ioutil.ReadAll(resp.Body)
+			assert.NoError(t, err)
+			_ = resp.Body.Close()
+			wg.Done()
+		}()
+	}
+	wg.Wait()
 }
 
 func TestReaderContextExpires(t *testing.T) {
