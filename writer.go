@@ -61,18 +61,18 @@ func (w *Writer) write(buf []byte, offset int64) (n int, err error) {
 
 	req, err := w.prepareRequest(http.MethodPatch, url, bytes.NewReader(buf))
 	if err != nil {
-		w.Errorf("Writer.write: Error creating request: %v", err)
+		w.Errorf("Writer.write: Error creating request for %s: %v", w.fileID, err)
 		return 0, err
 	}
 	req.Header.Set(HeaderRange, fmt.Sprintf("%d-%d", offset, len(buf)))
 
-	ctx, cancel := context.WithTimeout(context.Background(), HTTPTimeout)
-	defer cancel()
-	req = req.WithContext(ctx)
-
 	resp, err := w.client.Do(req)
 	if err != nil {
-		w.Errorf("Writer.write: Error executing request: %v", err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			w.Infof("Writer.write: Context timeout for %s: %v", w.fileID, err)
+		} else {
+			w.Errorf("Writer.write: Error executing request for %s: %v", w.fileID, err)
+		}
 		return 0, err
 	}
 	defer func() {
@@ -81,27 +81,27 @@ func (w *Writer) write(buf []byte, offset int64) (n int, err error) {
 
 	err = responseCodeToError(resp, http.StatusNoContent)
 	if err != nil {
-		w.Infof("Writer.write: A remote error occurred: %v", err)
+		w.Infof("Writer.write: A remote error occurred for %s: %v", w.fileID, err)
 		return 0, err
 	}
 
 	var servOffset, servLength int64
 	matches, err := fmt.Sscanf(resp.Header.Get(HeaderRange), "%d-%d", &servOffset, &servLength)
 	if err != nil || matches != 2 {
-		w.Errorf("Writer.write: Error parsing range header (%s): %v", resp.Header.Get(HeaderRange), err)
+		w.Errorf("Writer.write: Error parsing range header (%s) for %s: %v", resp.Header.Get(HeaderRange), w.fileID, err)
 		return 0, err
 	}
 
 	if servOffset != offset {
-		w.Errorf("Writer.write: Server returned unexpected offset (%d != %d)", offset, servOffset)
+		w.Errorf("Writer.write: Server returned unexpected offset (%d != %d) for %s", offset, servOffset, w.fileID)
 		return 0, errors.New("unexpected server offset")
 	}
 
 	if servLength != int64(len(buf)) {
-		w.Errorf("Writer.write: Server returned unexpected length (%d != %d)", len(buf), servLength)
+		w.Errorf("Writer.write: Server returned unexpected length (%d != %d) for %s", len(buf), servLength, w.fileID)
 		return 0, errors.New("unexpected server length")
 	}
 
-	w.Debugf("Writer.write: Wrote %d bytes from offset %d in file %s", len(buf), offset, w.fileID)
+	w.Debugf("Writer.write: Wrote %d bytes from offset %d for %s", len(buf), offset, w.fileID)
 	return int(servLength), nil
 }
