@@ -2,6 +2,7 @@ package networkfile
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -60,18 +61,18 @@ func (r *Reader) read(buf []byte, offset int64) (n int, err error) {
 
 	req, err := r.prepareRequest(http.MethodGet, url, nil)
 	if err != nil {
-		r.Errorf("Reader.read: Error creating request: %v", err)
+		r.Errorf("Reader.read: Error creating request for %s: %v", r.fileID, err)
 		return 0, err
 	}
 	req.Header.Set(HeaderRange, fmt.Sprintf("%d-%d", offset, len(buf)))
 
-	ctx, cancel := context.WithTimeout(context.Background(), HTTPTimeout)
-	defer cancel()
-	req = req.WithContext(ctx)
-
 	resp, err := r.client.Do(req)
 	if err != nil {
-		r.Errorf("Reader.read: Error executing request: %v", err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			r.Infof("Reader.read: Context timeout for %s: %v", r.fileID, err)
+		} else {
+			r.Errorf("Reader.read: Error executing request for %s: %v", r.fileID, err)
+		}
 		return 0, err
 	}
 	defer func() {
@@ -80,13 +81,13 @@ func (r *Reader) read(buf []byte, offset int64) (n int, err error) {
 
 	err = responseCodeToError(resp, http.StatusPartialContent)
 	if err != nil {
-		r.Infof("Reader.read: A remote error occurred: %v", err)
+		r.Infof("Reader.read: A remote error occurred for %s: %v", r.fileID, err)
 		return 0, err
 	}
 
 	n, err = resp.Body.Read(buf)
 	if err != nil && err != io.EOF {
-		r.Errorf("Reader.read: Error reading http body: %v", err)
+		r.Errorf("Reader.read: Error reading http body for %s: %v", r.fileID, err)
 		return n, err
 	}
 	if n == 0 {

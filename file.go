@@ -3,26 +3,27 @@ package networkfile
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"time"
-)
-
-const (
-	// HTTPTimeout is the time given for HTTP requests
-	HTTPTimeout = 3 * time.Second
 )
 
 // file is the base file for the remote file handles
 type file struct {
 	embedLogger
 	client       *http.Client
+	ctx          context.Context
 	baseURL      string
 	sharedSecret string
 	fileID       FileID
 	offset       int64
+}
+
+// SetContext sets a context on the requests executed
+func (f *file) SetContext(ctx context.Context) {
+	f.ctx = ctx
 }
 
 // Seek seeks to the given offset from the given mode
@@ -70,7 +71,11 @@ func (f *file) Close() (err error) {
 
 // prepareRequest prepares a new HTTP request
 func (f *file) prepareRequest(method, url string, body io.Reader) (req *http.Request, err error) {
-	req, err = http.NewRequest(method, url, body)
+	if f.ctx == nil {
+		req, err = http.NewRequest(method, url, body)
+	} else {
+		req, err = http.NewRequestWithContext(f.ctx, method, url, body)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -83,17 +88,17 @@ func (f *file) stat() (fi FileInfo, err error) {
 	url := fmt.Sprintf("%s/%s", f.baseURL, f.fileID)
 	req, err := f.prepareRequest(http.MethodOptions, url, nil)
 	if err != nil {
-		f.Errorf("file.stat: Error creating request: %v", err)
+		f.Errorf("file.stat: Error creating request for %s: %v", f.fileID, err)
 		return fi, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), HTTPTimeout)
-	defer cancel()
-	req = req.WithContext(ctx)
-
 	resp, err := f.client.Do(req)
 	if err != nil {
-		f.Errorf("file.stat: Error executing request: %v", err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			f.Infof("file.stat: Context timeout for %s: %v", f.fileID, err)
+		} else {
+			f.Errorf("file.stat: Error executing request for %s: %v", f.fileID, err)
+		}
 		return fi, err
 	}
 	defer func() {
@@ -102,14 +107,14 @@ func (f *file) stat() (fi FileInfo, err error) {
 
 	err = responseCodeToError(resp, http.StatusOK)
 	if err != nil {
-		f.Infof("file.stat: A remote error occurred: %v", err)
+		f.Infof("file.stat: A remote error occurred for %s: %v", f.fileID, err)
 		return fi, err
 	}
 
 	decoder := json.NewDecoder(resp.Body)
 	err = decoder.Decode(&fi)
 	if err != nil {
-		f.Errorf("file.stat: Error decoding file info: %v", err)
+		f.Errorf("file.stat: Error decoding file info for %s: %v", f.fileID, err)
 		return fi, err
 	}
 
@@ -126,20 +131,20 @@ func (f *file) close() (err error) {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), HTTPTimeout)
-	defer cancel()
-	req = req.WithContext(ctx)
-
 	resp, err := f.client.Do(req)
 	if err != nil {
-		f.Errorf("file.close: Error executing request: %v", err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			f.Infof("file.close: Context timeout for %s: %v", f.fileID, err)
+		} else {
+			f.Errorf("file.close: Error executing request for %s: %v", f.fileID, err)
+		}
 		return err
 	}
 	_ = resp.Body.Close()
 
 	err = responseCodeToError(resp, http.StatusNoContent)
 	if err != nil {
-		f.Infof("file.close: A remote error occurred: %v", err)
+		f.Infof("file.close: A remote error occurred for %s: %v", f.fileID, err)
 		return err
 	}
 
