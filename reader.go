@@ -14,10 +14,11 @@ type Reader struct {
 }
 
 // NewReader creates a new remote Reader for the given URL, shared secret and FileID
-func NewReader(baseURL, sharedSecret string, fileID FileID) *Reader {
+func NewReader(ctx context.Context, baseURL, sharedSecret string, fileID FileID) *Reader {
 	return &Reader{
 		file: file{
 			client:       http.DefaultClient,
+			ctx:          ctx,
 			baseURL:      baseURL,
 			sharedSecret: sharedSecret,
 			fileID:       fileID,
@@ -27,10 +28,11 @@ func NewReader(baseURL, sharedSecret string, fileID FileID) *Reader {
 }
 
 // NewCustomClientReader creates a new remote Reader for the given HTTP file, URL, shared secret and FileID
-func NewCustomClientReader(httpClient *http.Client, baseURL, sharedSecret string, fileID FileID) *Reader {
+func NewCustomClientReader(ctx context.Context, httpClient *http.Client, baseURL, sharedSecret string, fileID FileID) *Reader {
 	return &Reader{
 		file: file{
 			client:       httpClient,
+			ctx:          ctx,
 			baseURL:      baseURL,
 			sharedSecret: sharedSecret,
 			fileID:       fileID,

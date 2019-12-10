@@ -14,10 +14,11 @@ type Writer struct {
 }
 
 // NewWriter creates a new remote Writer for the given URL, shared secret and FileID
-func NewWriter(baseURL, sharedSecret string, fileID FileID) *Writer {
+func NewWriter(ctx context.Context, baseURL, sharedSecret string, fileID FileID) *Writer {
 	return &Writer{
 		file: file{
 			client:       http.DefaultClient,
+			ctx:          ctx,
 			baseURL:      baseURL,
 			sharedSecret: sharedSecret,
 			fileID:       fileID,
@@ -27,10 +28,11 @@ func NewWriter(baseURL, sharedSecret string, fileID FileID) *Writer {
 }
 
 // NewCustomClientWriter creates a new remote Writer for the given HTTP file, URL, shared secret and FileID
-func NewCustomClientWriter(httpClient *http.Client, baseURL, sharedSecret string, fileID FileID) *Writer {
+func NewCustomClientWriter(ctx context.Context, httpClient *http.Client, baseURL, sharedSecret string, fileID FileID) *Writer {
 	return &Writer{
 		file: file{
 			client:       httpClient,
+			ctx:          ctx,
 			baseURL:      baseURL,
 			sharedSecret: sharedSecret,
 			fileID:       fileID,
