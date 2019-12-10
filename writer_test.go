@@ -36,7 +36,7 @@ func TestWriterCopyFile(t *testing.T) {
 	err = srv.ServeFileWriter(context.Background(), fileID, dst)
 	assert.NoError(t, err)
 
-	wrtr := NewCustomClientWriter(newHTTPUnixClient(socket), "http://server", secret, fileID)
+	wrtr := NewCustomClientWriter(context.Background(), newHTTPUnixClient(socket), "http://server", secret, fileID)
 	wrtr.SetLogger(&testLogger{t})
 
 	src, err := randomFile(117)
@@ -90,7 +90,7 @@ func TestWriterCopyFileLargeBuffer(t *testing.T) {
 	err = srv.ServeFileWriter(context.Background(), fileID, dst)
 	assert.NoError(t, err)
 
-	wrtr := NewCustomClientWriter(newHTTPUnixClient(socket), "http://server", secret, fileID)
+	wrtr := NewCustomClientWriter(context.Background(), newHTTPUnixClient(socket), "http://server", secret, fileID)
 	wrtr.SetLogger(&testLogger{t})
 
 	src, err := randomFile(17_177_717)
@@ -145,7 +145,7 @@ func TestPutRequest(t *testing.T) {
 	assert.NoError(t, err)
 
 	client := newHTTPUnixClient(socket)
-	wrtr := NewCustomClientWriter(client, "http://server", secret, fileID)
+	wrtr := NewCustomClientWriter(context.Background(), client, "http://server", secret, fileID)
 	wrtr.SetLogger(&testLogger{t})
 
 	src, err := randomFile(133_799)

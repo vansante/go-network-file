@@ -21,11 +21,6 @@ type file struct {
 	offset       int64
 }
 
-// SetContext sets a context on the requests executed
-func (f *file) SetContext(ctx context.Context) {
-	f.ctx = ctx
-}
-
 // Seek seeks to the given offset from the given mode
 func (f *file) Seek(offset int64, whence int) (int64, error) {
 	switch whence {

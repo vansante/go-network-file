@@ -85,7 +85,7 @@ func TestReaderCopyFile(t *testing.T) {
 
 	err = srv.ServeFileReader(context.Background(), fileID, src)
 
-	rdr := NewCustomClientReader(newHTTPUnixClient(socket), "http://server", secret, fileID)
+	rdr := NewCustomClientReader(context.Background(), newHTTPUnixClient(socket), "http://server", secret, fileID)
 	rdr.SetLogger(&testLogger{t})
 
 	dst, err := ioutil.TempFile(os.TempDir(), "reader-copy-test-")
@@ -140,7 +140,7 @@ func TestReaderCopySingleCall(t *testing.T) {
 
 	err = srv.ServeFileReader(context.Background(), fileID, src)
 
-	rdr := NewCustomClientReader(newHTTPUnixClient(socket), "http://server", secret, fileID)
+	rdr := NewCustomClientReader(context.Background(), newHTTPUnixClient(socket), "http://server", secret, fileID)
 	rdr.SetLogger(&testLogger{t})
 	dst, err := ioutil.TempFile(os.TempDir(), "reader-single-copy-test-")
 	assert.NoError(t, err)
@@ -195,7 +195,7 @@ func TestReaderSeek(t *testing.T) {
 
 	err = srv.ServeFileReader(context.Background(), fileID, src)
 
-	rdr := NewCustomClientReader(newHTTPUnixClient(socket), "http://server", secret, fileID)
+	rdr := NewCustomClientReader(context.Background(), newHTTPUnixClient(socket), "http://server", secret, fileID)
 	rdr.SetLogger(&testLogger{t})
 
 	off, err := rdr.Seek(2, io.SeekStart)
@@ -253,7 +253,7 @@ func TestFullGetRead(t *testing.T) {
 	assert.NoError(t, err)
 
 	client := newHTTPUnixClient(socket)
-	rdr := NewCustomClientReader(client, "http://server", secret, fileID)
+	rdr := NewCustomClientReader(context.Background(), client, "http://server", secret, fileID)
 	resp, err := client.Get(rdr.FullReadURL())
 	assert.NoError(t, err)
 
@@ -295,7 +295,7 @@ func TestMultipleFullGetRead(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		go func() {
 			client := newHTTPUnixClient(socket)
-			rdr := NewCustomClientReader(client, "http://server", secret, fileID)
+			rdr := NewCustomClientReader(context.Background(), client, "http://server", secret, fileID)
 			resp, err := client.Get(rdr.FullReadURL())
 			assert.NoError(t, err)
 			if err != nil {
@@ -358,7 +358,7 @@ func TestReaderBadSecret(t *testing.T) {
 	}()
 	time.Sleep(100 * time.Millisecond)
 
-	rdr := NewCustomClientReader(newHTTPUnixClient(socket), "http://server", "wrong", "test")
+	rdr := NewCustomClientReader(context.Background(), newHTTPUnixClient(socket), "http://server", "wrong", "test")
 	rdr.SetLogger(&testLogger{t})
 	n, err := rdr.Read(make([]byte, 11))
 	assert.EqualValues(t, 0, n)
@@ -381,7 +381,7 @@ func TestReaderUnknownFile(t *testing.T) {
 	}()
 	time.Sleep(100 * time.Millisecond)
 
-	rdr := NewCustomClientReader(newHTTPUnixClient(socket), "http://server", secret, "test")
+	rdr := NewCustomClientReader(context.Background(), newHTTPUnixClient(socket), "http://server", secret, "test")
 	rdr.SetLogger(&testLogger{t})
 	n, err := rdr.Read(make([]byte, 11))
 	assert.EqualValues(t, 0, n)
