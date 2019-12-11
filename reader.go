@@ -70,8 +70,8 @@ func (r *Reader) read(buf []byte, offset int64) (n int, err error) {
 
 	resp, err := r.client.Do(req)
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			r.Infof("Reader.read: Context timeout for %s: %v", r.fileID, err)
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			r.Infof("Reader.read: Context expired for %s: %v", r.fileID, err)
 		} else {
 			r.Errorf("Reader.read: Error executing request for %s: %v", r.fileID, err)
 		}
