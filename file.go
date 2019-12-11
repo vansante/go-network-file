@@ -89,8 +89,8 @@ func (f *file) stat() (fi FileInfo, err error) {
 
 	resp, err := f.client.Do(req)
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			f.Infof("file.stat: Context timeout for %s: %v", f.fileID, err)
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			f.Infof("file.stat: Context expired for %s: %v", f.fileID, err)
 		} else {
 			f.Errorf("file.stat: Error executing request for %s: %v", f.fileID, err)
 		}
@@ -128,8 +128,8 @@ func (f *file) close() (err error) {
 
 	resp, err := f.client.Do(req)
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			f.Infof("file.close: Context timeout for %s: %v", f.fileID, err)
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			f.Infof("file.close: Context expired for %s: %v", f.fileID, err)
 		} else {
 			f.Errorf("file.close: Error executing request for %s: %v", f.fileID, err)
 		}

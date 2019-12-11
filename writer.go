@@ -70,8 +70,8 @@ func (w *Writer) write(buf []byte, offset int64) (n int, err error) {
 
 	resp, err := w.client.Do(req)
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			w.Infof("Writer.write: Context timeout for %s: %v", w.fileID, err)
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			w.Infof("Writer.write: Context expired for %s: %v", w.fileID, err)
 		} else {
 			w.Errorf("Writer.write: Error executing request for %s: %v", w.fileID, err)
 		}
