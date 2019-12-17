@@ -89,7 +89,11 @@ func (r *Reader) read(buf []byte, offset int64) (n int, err error) {
 
 	n, err = resp.Body.Read(buf)
 	if err != nil && err != io.EOF {
-		r.Errorf("Reader.read: Error reading http body for %s: %v", r.fileID, err)
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			r.Infof("Reader.read: Context expired for %s: %v", r.fileID, err)
+		} else {
+			r.Errorf("Reader.read: Error reading http body for %s: %v", r.fileID, err)
+		}
 		return n, err
 	}
 	if n == 0 {
