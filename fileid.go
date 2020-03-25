@@ -11,6 +11,7 @@ type FileID string
 
 // FileIDFromPath creates a usable FileID from a file path
 func FileIDFromPath(path string) FileID {
+	path = strings.ReplaceAll(path, "/", "_")
 	return FileID(url.PathEscape(path))
 }
 
