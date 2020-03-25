@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"net/url"
+	"strings"
 )
 
 // FileID is a unique descriptor for a file, should be usable in an URL.
