@@ -11,7 +11,7 @@ type FileID string
 
 // FileIDFromPath creates a usable FileID from a file path
 func FileIDFromPath(path string) FileID {
-	return FileID(url.QueryEscape(path))
+	return FileID(url.PathEscape(path))
 }
 
 // RandomFileID returns a new random FileID
