@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"net/url"
+	"strings"
 )
 
 // FileID is a unique descriptor for a file, should be usable in an URL.
@@ -11,6 +12,7 @@ type FileID string
 
 // FileIDFromPath creates a usable FileID from a file path
 func FileIDFromPath(path string) FileID {
+	path = strings.ReplaceAll(path, "/", "_")
 	return FileID(url.PathEscape(path))
 }
 
