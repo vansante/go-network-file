@@ -140,13 +140,22 @@ func (fs *FileServer) SetWriteBufferSize(size int) {
 }
 
 // Serve starts serving the FileServer over HTTP over the given socket
-func (fs *FileServer) Serve(socket net.Listener) (err error) {
+// Serve always returns a non-nil error. After Shutdown or Close, the
+// returned error is ErrServerClosed.
+func (fs *FileServer) Serve(socket net.Listener) error {
 	return fs.server.Serve(socket)
+}
+
+// Serve starts serving the FileServer over HTTPS over the given socket
+// ServeHTTPS always returns a non-nil error. After Shutdown or Close, the
+// returned error is ErrServerClosed.
+func (fs *FileServer) ServeHTTPS(socket net.Listener, certFile, keyFile string) error {
+	return fs.server.ServeTLS(socket, certFile, keyFile)
 }
 
 // Shutdown shuts down the HTTP server gracefully with a context.
 // The socket needs to be closed manually
-func (fs *FileServer) Shutdown(ctx context.Context) (err error) {
+func (fs *FileServer) Shutdown(ctx context.Context) error {
 	return fs.server.Shutdown(ctx)
 }
 
