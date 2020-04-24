@@ -146,10 +146,10 @@ func (fs *FileServer) Serve(socket net.Listener) error {
 	return fs.server.Serve(socket)
 }
 
-// Serve starts serving the FileServer over HTTPS over the given socket
-// ServeHTTPS always returns a non-nil error. After Shutdown or Close, the
+// ServeTLS starts serving the FileServer over HTTPS over the given socket
+// ServeTLS always returns a non-nil error. After Shutdown or Close, the
 // returned error is ErrServerClosed.
-func (fs *FileServer) ServeHTTPS(socket net.Listener, certFile, keyFile string) error {
+func (fs *FileServer) ServeTLS(socket net.Listener, certFile, keyFile string) error {
 	return fs.server.ServeTLS(socket, certFile, keyFile)
 }
 
