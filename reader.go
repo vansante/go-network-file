@@ -87,8 +87,14 @@ func (r *Reader) read(buf []byte, offset int64) (n int, err error) {
 		return 0, err
 	}
 
-	n, err = resp.Body.Read(buf)
-	if err != nil && err != io.EOF {
+	for len(buf) > 0 && err == nil {
+		var copied int
+		copied, err = resp.Body.Read(buf)
+		n += copied
+		buf = buf[copied:]
+	}
+
+	if err != nil && !errors.Is(err, io.EOF) {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 			r.Infof("Reader.read: Context expired for %s: %v", r.fileID, err)
 		} else {

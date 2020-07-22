@@ -391,6 +391,44 @@ func TestReaderUnknownFile(t *testing.T) {
 	assert.NoError(t, srv.Shutdown(context.Background()))
 }
 
+func TestReaderLargeFile(t *testing.T) {
+	srv := NewFileServer(secret)
+	srv.SetLogger(&testLogger{t})
+
+	sock, err := net.Listen("tcp", ":1337")
+	assert.NoError(t, err)
+	go func() {
+		err = srv.Serve(sock)
+		assert.EqualValues(t, http.ErrServerClosed, err)
+	}()
+
+	srv.SetLogger(&testLogger{t})
+
+	fileID, err := RandomFileID()
+	assert.NoError(t, err)
+	src, err := randomFile(1337 * 1337 * 13)
+	assert.NoError(t, err)
+	defer func() {
+		_ = src.Close()
+		_ = os.Remove(src.Name())
+	}()
+
+	err = srv.ServeFileReader(context.Background(), fileID, src)
+
+	rdr := NewReader(context.Background(), "http://localhost:1337", secret, fileID)
+	rdr.SetLogger(&testLogger{t})
+	dst, err := ioutil.TempFile(os.TempDir(), "reader-single-copy-test-")
+	assert.NoError(t, err)
+	defer func() {
+		_ = dst.Close()
+		_ = os.Remove(dst.Name())
+	}()
+
+	n, err := io.CopyBuffer(dst, rdr, make([]byte, 32*1024))
+	assert.NoError(t, err)
+	assert.EqualValues(t, 1337*1337*13, n)
+}
+
 type testLogger struct {
 	*testing.T
 }
