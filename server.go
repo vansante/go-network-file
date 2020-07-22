@@ -254,12 +254,12 @@ func (fs *FileServer) statFile(fileID FileID) (info FileInfo, err error) {
 	fs.mu.RLock()
 	reader := fs.readers[fileID]
 	if reader != nil {
-		handle = reader
+		handle = reader.rdr
 	}
 	if handle == nil {
 		writer := fs.writers[fileID]
 		if writer != nil {
-			handle = writer
+			handle = writer.wrtr
 		}
 	}
 	fs.mu.RUnlock()
