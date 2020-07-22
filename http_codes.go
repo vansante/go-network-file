@@ -72,7 +72,7 @@ func responseCodeToError(resp *http.Response, expected int) (err error) {
 
 	buf := make([]byte, 512)
 	n, err := resp.Body.Read(buf)
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		return fmt.Errorf(
 			"%d: an unknown error occurred but the error could not be determined because: %v",
 			resp.StatusCode, err,

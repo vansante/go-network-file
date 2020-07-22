@@ -33,12 +33,6 @@ const (
 
 	// HeaderContentLength is the header used for sending the file size
 	HeaderContentLength = "Content-Length"
-
-	// DefaultReadBufferSize is the default buffer size used while reading
-	DefaultReadBufferSize = 256 * 1024
-
-	// DefaultWriteBufferSize is the default buffer size used while writing
-	DefaultWriteBufferSize = 256 * 1024
 )
 
 // RandomSharedSecret returns a random shared secret
@@ -52,13 +46,23 @@ func RandomSharedSecret(bytes int) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
+type reader struct {
+	rdr io.ReadSeeker
+	mu  sync.Mutex
+}
+
+type writer struct {
+	wrtr io.WriteSeeker
+	mu   sync.Mutex
+}
+
 // FileServer is a HTTP server that serves files as io.Readers or io.Writers
 type FileServer struct {
 	embedLogger
 	sharedSecret      string
 	server            *http.Server
-	readers           map[FileID]*concurrentReadSeeker
-	writers           map[FileID]*concurrentWriteSeeker
+	readers           map[FileID]*reader
+	writers           map[FileID]*writer
 	allowStat         bool // Allow disclosing the information of Stat()
 	allowClose        bool // Allow clients to close a reader/writer
 	allowFullGET      bool // Allow serving the file via a normal GET request
@@ -66,8 +70,6 @@ type FileServer struct {
 	discloseFilenames bool // Allow disclosing filename via Stat()
 	closeReaders      bool // Attempt to detect io.Closer and close the io.ReaderAt.
 	closeWriters      bool // Attempt to detect io.Closer and close the io.WriterAt.
-	readBufferSize    int
-	writeBufferSize   int
 	mu                sync.RWMutex
 }
 
@@ -75,8 +77,8 @@ type FileServer struct {
 func NewFileServer(sharedSecret string) (fs *FileServer) {
 	fs = &FileServer{
 		sharedSecret:      sharedSecret,
-		readers:           make(map[FileID]*concurrentReadSeeker),
-		writers:           make(map[FileID]*concurrentWriteSeeker),
+		readers:           make(map[FileID]*reader),
+		writers:           make(map[FileID]*writer),
 		allowStat:         true,
 		allowClose:        true,
 		allowFullGET:      true,
@@ -84,8 +86,6 @@ func NewFileServer(sharedSecret string) (fs *FileServer) {
 		discloseFilenames: true,
 		closeReaders:      true,
 		closeWriters:      true,
-		readBufferSize:    DefaultReadBufferSize,
-		writeBufferSize:   DefaultWriteBufferSize,
 	}
 
 	fs.server = &http.Server{Handler: fs}
@@ -121,22 +121,6 @@ func (fs *FileServer) DiscloseFilenames(secret bool) {
 func (fs *FileServer) CloseIO(closeReaders, closeWriters bool) {
 	fs.closeReaders = closeReaders
 	fs.closeWriters = closeWriters
-}
-
-// SetReadBufferSize sets the write buffer size
-func (fs *FileServer) SetReadBufferSize(size int) {
-	if size < 1 {
-		panic("setting a read buffer size under 1 is impossible")
-	}
-	fs.readBufferSize = size
-}
-
-// SetWriteBufferSize sets the write buffer size
-func (fs *FileServer) SetWriteBufferSize(size int) {
-	if size < 1 {
-		panic("setting a write buffer size under 1 is impossible")
-	}
-	fs.writeBufferSize = size
 }
 
 // Serve starts serving the FileServer over HTTP over the given socket
@@ -215,9 +199,7 @@ func (fs *FileServer) ServeFileReader(ctx context.Context, fileID FileID, file i
 		return err
 	}
 
-	fs.readers[fileID] = &concurrentReadSeeker{
-		src: file,
-	}
+	fs.readers[fileID] = &reader{rdr: file}
 
 	go func() {
 		// Wait for the context to expire, then close the reader if it hasnt been already
@@ -246,9 +228,7 @@ func (fs *FileServer) ServeFileWriter(ctx context.Context, fileID FileID, file i
 		return err
 	}
 
-	fs.writers[fileID] = &concurrentWriteSeeker{
-		src: file,
-	}
+	fs.writers[fileID] = &writer{wrtr: file}
 
 	go func() {
 		// Wait for the context to expire, then close the writer if it hasnt been already
@@ -274,12 +254,12 @@ func (fs *FileServer) statFile(fileID FileID) (info FileInfo, err error) {
 	fs.mu.RLock()
 	reader := fs.readers[fileID]
 	if reader != nil {
-		handle = reader.src
+		handle = reader
 	}
 	if handle == nil {
 		writer := fs.writers[fileID]
 		if writer != nil {
-			handle = writer.src
+			handle = writer
 		}
 	}
 	fs.mu.RUnlock()
@@ -368,10 +348,13 @@ func (fs *FileServer) handleReadFile(resp http.ResponseWriter, req *http.Request
 		return
 	}
 
+	reader.mu.Lock()
+	defer reader.mu.Unlock()
+
 	if fs.allowFullGET && req.Header.Get(HeaderRange) == "" {
 		// If the special range header is not set, treat it like a normal GET request
 		// Serve the file with the Go http handler to support partial requests
-		http.ServeContent(resp, req, string(fileID), time.Now(), reader.New())
+		http.ServeContent(resp, req, string(fileID), time.Now(), reader.rdr)
 		return
 	}
 
@@ -382,16 +365,15 @@ func (fs *FileServer) handleReadFile(resp http.ResponseWriter, req *http.Request
 
 	resp.WriteHeader(http.StatusPartialContent)
 
-	rdr := reader.New()
-	_, err := rdr.Seek(offset, io.SeekStart)
+	_, err := reader.rdr.Seek(offset, io.SeekStart)
 	if err != nil {
 		fs.Errorf("FileServer.handleReadFile: Error seeking to offset %d: %v", offset, err)
 		writeErrorToResponseWriter(resp, err)
 		return
 	}
 
-	n, err := io.CopyBuffer(resp, io.LimitReader(rdr, length), make([]byte, fs.readBufferSize))
-	if err != nil && err != io.EOF {
+	n, err := io.Copy(resp, io.LimitReader(reader.rdr, length))
+	if err != nil && !errors.Is(err, io.EOF) {
 		fs.Debugf("FileServer.handleReadFile: Error copying to response %s: %v", fileID, err)
 		return
 	}
@@ -415,16 +397,18 @@ func (fs *FileServer) handleWriteFile(resp http.ResponseWriter, req *http.Reques
 		return
 	}
 
-	wrtr := writer.New()
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+
 	fs.Debugf("FileServer.handleWriteFile: Seeking to write position %d", offset)
-	_, err := wrtr.Seek(offset, io.SeekStart)
+	_, err := writer.wrtr.Seek(offset, io.SeekStart)
 	if err != nil {
 		fs.Errorf("FileServer.handleWriteFile: Error seeking to write position %d: %v", offset, err)
 		writeErrorToResponseWriter(resp, err)
 		return
 	}
 
-	n, err := io.CopyBuffer(wrtr, req.Body, make([]byte, fs.writeBufferSize))
+	n, err := io.Copy(writer.wrtr, req.Body)
 	if err != nil {
 		fs.Errorf("FileServer.handleWriteFile: Error writing to writer: %v", err)
 		writeErrorToResponseWriter(resp, err)
@@ -454,7 +438,15 @@ func (fs *FileServer) handleFullWriteFile(resp http.ResponseWriter, req *http.Re
 	writer := fs.writers[fileID]
 	fs.mu.RUnlock()
 
-	n, err := io.CopyBuffer(writer.New(), req.Body, make([]byte, fs.writeBufferSize))
+	if writer == nil {
+		resp.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+
+	n, err := io.Copy(writer.wrtr, req.Body)
 	if err != nil {
 		fs.Errorf("FileServer.handleFullWriteFile: Error writing to writer %s: %v", fileID, err)
 		writeErrorToResponseWriter(resp, err)
@@ -496,7 +488,7 @@ func (fs *FileServer) closeReader(fileID FileID) bool {
 	}
 
 	if fs.closeReaders {
-		closer, ok := fs.readers[fileID].src.(io.Closer)
+		closer, ok := fs.readers[fileID].rdr.(io.Closer)
 		if ok {
 			fs.Debugf("FileServer.closeReader: Closer detected, closing: %s", fileID)
 			err := closer.Close()
@@ -517,7 +509,7 @@ func (fs *FileServer) closeWriter(fileID FileID) bool {
 	}
 
 	if fs.closeWriters {
-		closer, ok := fs.writers[fileID].src.(io.Closer)
+		closer, ok := fs.writers[fileID].wrtr.(io.Closer)
 		if ok {
 			fs.Debugf("FileServer.closeWriter: Closer detected, closing: %s", fileID)
 			err := closer.Close()
