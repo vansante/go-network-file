@@ -87,14 +87,11 @@ func (r *Reader) read(buf []byte, offset int64) (n int, err error) {
 		return 0, err
 	}
 
-	for len(buf) > 0 {
+	for len(buf) > 0 && err == nil {
 		var copied int
 		copied, err = resp.Body.Read(buf)
 		n += copied
 		buf = buf[copied:]
-		if err != nil {
-			break
-		}
 	}
 
 	if err != nil && !errors.Is(err, io.EOF) {
