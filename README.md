@@ -4,7 +4,7 @@ Provides an io.ReaderAt and io.WriterAt interface over the network using simple 
 ## Installation
 
 ```
-go get gopkg.in/vansante/go-ffprobe.v2
+go get gopkg.in/vansante/go-network-file.v2
 ```
 
 ## Documentation
