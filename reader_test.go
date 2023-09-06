@@ -184,7 +184,7 @@ func TestFullGetRead(t *testing.T) {
 
 	fileID, err := RandomFileID()
 	assert.NoError(t, err)
-	src, err := randomFile(11325)
+	src, err := randomFile(7325)
 	assert.NoError(t, err)
 
 	err = srv.ServeFileReader(context.Background(), fileID, src)
