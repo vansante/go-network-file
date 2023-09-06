@@ -126,7 +126,7 @@ func TestPutRequest(t *testing.T) {
 
 	srcPath := src.Name()
 
-	req, err := http.NewRequest(http.MethodPut, wrtr.PutURL(), src)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPut, wrtr.PutURL(), src)
 	assert.NoError(t, err)
 	resp, err := http.DefaultClient.Do(req)
 	assert.NoError(t, err)
