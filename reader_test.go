@@ -5,9 +5,8 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
-	"io/ioutil"
-	"log"
-	rand2 "math/rand"
+	"math"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -24,7 +23,7 @@ const (
 )
 
 func randomFile(size int) (*os.File, error) {
-	file, err := ioutil.TempFile(os.TempDir(), "rndfile-")
+	file, err := os.CreateTemp(os.TempDir(), "rndfile-")
 	if err != nil {
 		return nil, err
 	}
@@ -45,8 +44,10 @@ func randomFile(size int) (*os.File, error) {
 }
 
 func newSocketPath() string {
-	rand2.Seed(time.Now().UnixNano())
-	rnd := rand2.Uint64()
+	rnd, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt))
+	if err != nil {
+		panic(err)
+	}
 	return filepath.Join(os.TempDir(), fmt.Sprintf("testsock-%d", rnd))
 }
 
@@ -84,7 +85,7 @@ func TestReaderCopyFile(t *testing.T) {
 
 	rdr := NewCustomClientReader(context.Background(), newHTTPUnixClient(socket), "http://server", secret, fileID)
 
-	dst, err := ioutil.TempFile(os.TempDir(), "reader-copy-test-")
+	dst, err := os.CreateTemp(os.TempDir(), "reader-copy-test-")
 	assert.Nil(t, err)
 	defer func() {
 		_ = dst.Close()
@@ -97,12 +98,12 @@ func TestReaderCopyFile(t *testing.T) {
 
 	_, err = src.Seek(0, io.SeekStart)
 	assert.NoError(t, err)
-	srcBuf, err := ioutil.ReadAll(src)
+	srcBuf, err := io.ReadAll(src)
 	assert.NoError(t, err)
 
 	_, err = dst.Seek(0, io.SeekStart)
 	assert.NoError(t, err)
-	dstBuf, err := ioutil.ReadAll(dst)
+	dstBuf, err := io.ReadAll(dst)
 	assert.NoError(t, err)
 
 	assert.EqualValues(t, srcBuf, dstBuf)
@@ -134,7 +135,7 @@ func TestReaderCopySingleCall(t *testing.T) {
 	err = srv.ServeFileReader(context.Background(), fileID, src)
 
 	rdr := NewCustomClientReader(context.Background(), newHTTPUnixClient(socket), "http://server", secret, fileID)
-	dst, err := ioutil.TempFile(os.TempDir(), "reader-single-copy-test-")
+	dst, err := os.CreateTemp(os.TempDir(), "reader-single-copy-test-")
 	assert.NoError(t, err)
 	defer func() {
 		_ = dst.Close()
@@ -147,12 +148,12 @@ func TestReaderCopySingleCall(t *testing.T) {
 
 	_, err = src.Seek(0, io.SeekStart)
 	assert.NoError(t, err)
-	srcBuf, err := ioutil.ReadAll(src)
+	srcBuf, err := io.ReadAll(src)
 	assert.NoError(t, err)
 
 	_, err = dst.Seek(0, io.SeekStart)
 	assert.NoError(t, err)
-	dstBuf, err := ioutil.ReadAll(dst)
+	dstBuf, err := io.ReadAll(dst)
 	assert.NoError(t, err)
 
 	assert.EqualValues(t, srcBuf, dstBuf)
@@ -179,7 +180,7 @@ func TestReaderSeek(t *testing.T) {
 
 	_, err = src.Seek(0, io.SeekStart)
 	assert.NoError(t, err)
-	srcBuf, err := ioutil.ReadAll(src)
+	srcBuf, err := io.ReadAll(src)
 	assert.NoError(t, err)
 
 	err = srv.ServeFileReader(context.Background(), fileID, src)
@@ -244,10 +245,10 @@ func TestFullGetRead(t *testing.T) {
 
 	_, err = src.Seek(0, io.SeekStart)
 	assert.NoError(t, err)
-	srcBuf, err := ioutil.ReadAll(src)
+	srcBuf, err := io.ReadAll(src)
 	assert.NoError(t, err)
 
-	file, err := ioutil.ReadAll(resp.Body)
+	file, err := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
 
 	assert.EqualValues(t, file, srcBuf)
@@ -284,7 +285,7 @@ func TestMultipleFullGetRead(t *testing.T) {
 				return
 			}
 
-			_, err = ioutil.ReadAll(resp.Body)
+			_, err = io.ReadAll(resp.Body)
 			assert.NoError(t, err)
 			_ = resp.Body.Close()
 			wg.Done()
@@ -388,7 +389,7 @@ func TestReaderLargeFile(t *testing.T) {
 	err = srv.ServeFileReader(context.Background(), fileID, src)
 
 	rdr := NewReader(context.Background(), "http://localhost:1337", secret, fileID)
-	dst, err := ioutil.TempFile(os.TempDir(), "reader-single-copy-test-")
+	dst, err := os.CreateTemp(os.TempDir(), "reader-single-copy-test-")
 	assert.NoError(t, err)
 	defer func() {
 		_ = dst.Close()
@@ -398,23 +399,4 @@ func TestReaderLargeFile(t *testing.T) {
 	n, err := io.CopyBuffer(dst, rdr, make([]byte, 32*1024))
 	assert.NoError(t, err)
 	assert.EqualValues(t, 1337*1337*13, n)
-}
-
-type testLogger struct {
-	*testing.T
-}
-
-func (tl *testLogger) Debugf(format string, args ...interface{}) {
-	log.Printf("[DEBUG] "+format, args...)
-	// tl.Logf("[DEBUG] "+format, args...)
-}
-
-func (tl *testLogger) Infof(format string, args ...interface{}) {
-	log.Printf("[INFO] "+format, args...)
-	// tl.Logf("[INFO] "+format, args...)
-}
-
-func (tl *testLogger) Errorf(format string, args ...interface{}) {
-	log.Printf("[ERROR] "+format, args...)
-	// tl.Logf("[ERROR] "+format, args...)
 }

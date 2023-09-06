@@ -3,7 +3,6 @@ package networkfile
 import (
 	"context"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"os"
@@ -25,7 +24,7 @@ func TestWriterCopyFile(t *testing.T) {
 
 	fileID, err := RandomFileID()
 	assert.NoError(t, err)
-	dst, err := ioutil.TempFile(os.TempDir(), "writer-copy-test-")
+	dst, err := os.CreateTemp(os.TempDir(), "writer-copy-test-")
 	assert.NoError(t, err)
 	defer func() {
 		_ = dst.Close()
@@ -50,12 +49,12 @@ func TestWriterCopyFile(t *testing.T) {
 
 	_, err = dst.Seek(0, io.SeekStart)
 	assert.NoError(t, err)
-	dstBuf, err := ioutil.ReadAll(dst)
+	dstBuf, err := io.ReadAll(dst)
 	assert.NoError(t, err)
 
 	_, err = src.Seek(0, io.SeekStart)
 	assert.NoError(t, err)
-	srcBuf, err := ioutil.ReadAll(src)
+	srcBuf, err := io.ReadAll(src)
 	assert.NoError(t, err)
 
 	assert.EqualValues(t, srcBuf, dstBuf)
@@ -77,7 +76,7 @@ func TestWriterCopyFileLargeBuffer(t *testing.T) {
 
 	fileID, err := RandomFileID()
 	assert.NoError(t, err)
-	dst, err := ioutil.TempFile(os.TempDir(), "writer-large-test-")
+	dst, err := os.CreateTemp(os.TempDir(), "writer-large-test-")
 	assert.NoError(t, err)
 	defer func() {
 		_ = dst.Close()
@@ -102,12 +101,12 @@ func TestWriterCopyFileLargeBuffer(t *testing.T) {
 
 	_, err = dst.Seek(0, io.SeekStart)
 	assert.NoError(t, err)
-	dstBuf, err := ioutil.ReadAll(dst)
+	dstBuf, err := io.ReadAll(dst)
 	assert.NoError(t, err)
 
 	_, err = src.Seek(0, io.SeekStart)
 	assert.NoError(t, err)
-	srcBuf, err := ioutil.ReadAll(src)
+	srcBuf, err := io.ReadAll(src)
 	assert.NoError(t, err)
 
 	assert.EqualValues(t, srcBuf, dstBuf)
@@ -129,7 +128,7 @@ func TestPutRequest(t *testing.T) {
 
 	fileID, err := RandomFileID()
 	assert.NoError(t, err)
-	dst, err := ioutil.TempFile(os.TempDir(), "writer-put-test-")
+	dst, err := os.CreateTemp(os.TempDir(), "writer-put-test-")
 	assert.NoError(t, err)
 	defer func() {
 		_ = dst.Close()
@@ -165,12 +164,12 @@ func TestPutRequest(t *testing.T) {
 
 	_, err = dst.Seek(0, io.SeekStart)
 	assert.NoError(t, err)
-	dstBuf, err := ioutil.ReadAll(dst)
+	dstBuf, err := io.ReadAll(dst)
 	assert.NoError(t, err)
 
 	_, err = src.Seek(0, io.SeekStart)
 	assert.NoError(t, err)
-	srcBuf, err := ioutil.ReadAll(src)
+	srcBuf, err := io.ReadAll(src)
 	assert.NoError(t, err)
 
 	assert.EqualValues(t, srcBuf, dstBuf)

@@ -78,7 +78,11 @@ func NewFileServer(sharedSecret string) (fs *FileServer) {
 		logger:            slog.Default(),
 	}
 
-	fs.server = &http.Server{Handler: fs}
+	// TODO: FIXME: Pass in context here
+	fs.server = &http.Server{
+		Handler:           fs,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
 	return fs
 }
 
