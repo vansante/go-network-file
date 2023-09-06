@@ -187,6 +187,12 @@ func TestFullGetRead(t *testing.T) {
 	src, err := randomFile(11325)
 	assert.NoError(t, err)
 
+	srcBuf, err := io.ReadAll(src)
+	assert.NoError(t, err)
+
+	_, err = src.Seek(0, io.SeekStart)
+	assert.NoError(t, err)
+
 	err = srv.ServeFileReader(context.Background(), fileID, src)
 	assert.NoError(t, err)
 
@@ -194,11 +200,6 @@ func TestFullGetRead(t *testing.T) {
 	req, err := http.NewRequest(http.MethodGet, rdr.FullReadURL(), nil) // nolint:noctx
 	assert.NoError(t, err)
 	resp, err := http.DefaultClient.Do(req)
-	assert.NoError(t, err)
-
-	_, err = src.Seek(0, io.SeekStart)
-	assert.NoError(t, err)
-	srcBuf, err := io.ReadAll(src)
 	assert.NoError(t, err)
 
 	file, err := io.ReadAll(resp.Body)

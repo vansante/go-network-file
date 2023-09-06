@@ -1,13 +1,3 @@
-run:
-  # timeout for analysis, e.g. 30s, 5m, default is 1m
-  deadline: 30s
-
-  # exit code when at least one issue was found, default is 1
-  issues-exit-code: 1
-
-  # include test files or not, default is true
-  tests: true
-
 # all available settings of specific linters
 linters-settings:
   gocyclo:
