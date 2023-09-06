@@ -8,18 +8,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"sync"
 	"time"
 )
 
-var (
-	ErrFileIDTaken = errors.New("fileID is already being used")
-)
+var ErrFileIDTaken = errors.New("fileID is already being used")
 
 const (
-	// MaximumBufferSize is the minimum buffer size for one HTTP call
+	// MinumumBufferSize is the minimum buffer size for one HTTP call
 	MinumumBufferSize = 1
 
 	// HeaderSharedSecret is the name of the header where the shared secret is passed
@@ -46,9 +45,8 @@ func RandomSharedSecret(bytes int) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
-// FileServer is a HTTP server that serves files as io.Readers or io.Writers
+// FileServer is an HTTP server that serves files as io.Readers or io.Writers
 type FileServer struct {
-	embedLogger
 	sharedSecret      string
 	server            *http.Server
 	readers           map[FileID]*concurrentReadSeeker
@@ -61,6 +59,7 @@ type FileServer struct {
 	closeReaders      bool // Attempt to detect io.Closer and close the io.ReaderAt.
 	closeWriters      bool // Attempt to detect io.Closer and close the io.WriterAt.
 	mu                sync.RWMutex
+	logger            *slog.Logger
 }
 
 // NewFileServer creates a new FileServer with a given shared secret
@@ -76,10 +75,16 @@ func NewFileServer(sharedSecret string) (fs *FileServer) {
 		discloseFilenames: true,
 		closeReaders:      true,
 		closeWriters:      true,
+		logger:            slog.Default(),
 	}
 
 	fs.server = &http.Server{Handler: fs}
 	return fs
+}
+
+// SetLogger sets a new structured logger, replacing the default slog logger
+func (fs *FileServer) SetLogger(logger *slog.Logger) {
+	fs.logger = logger
 }
 
 // AllowStat sets whether it is allowed to stat a file by clients and thus divulge more information about it
@@ -145,7 +150,7 @@ func (fs *FileServer) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 		secret = req.URL.Query().Get(GETSharedSecret)
 	}
 	if secret != fs.sharedSecret {
-		fs.Debugf("FileServer.ServeHTTP: Invalid secret")
+		fs.logger.Debug("networkfile.FileServer.ServeHTTP: Invalid secret")
 		resp.WriteHeader(http.StatusUnauthorized)
 		return
 	}
@@ -170,7 +175,7 @@ func (fs *FileServer) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 	case http.MethodDelete:
 		fs.handleCloseFile(resp, fileID)
 	default:
-		fs.Debugf("FileServer.ServeHTTP: Invalid method %s", req.Method)
+		fs.logger.Debug("networkfile.FileServer.ServeHTTP: Invalid method", "method", req.Method)
 		resp.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }
@@ -199,14 +204,14 @@ func (fs *FileServer) ServeFileReader(ctx context.Context, fileID FileID, file i
 
 		fs.mu.Lock()
 		if fs.closeReader(fileID) {
-			fs.Infof("FileServer.ServeFileReader: Context for file reader expired: %s", fileID)
+			fs.logger.Info("networkfile.FileServer.ServeFileReader: Context for file reader expired", "fileID", fileID)
 		}
 		fs.mu.Unlock()
 	}()
 	return nil
 }
 
-// ServeFileReader makes the given Writer available under the given FileID
+// ServeFileWriter makes the given Writer available under the given FileID
 func (fs *FileServer) ServeFileWriter(ctx context.Context, fileID FileID, file io.WriteSeeker) error {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
@@ -230,7 +235,7 @@ func (fs *FileServer) ServeFileWriter(ctx context.Context, fileID FileID, file i
 
 		fs.mu.Lock()
 		if fs.closeWriter(fileID) {
-			fs.Infof("FileServer.ServeFileWriter: Context for file writer expired: %s", fileID)
+			fs.logger.Info("networkfile.FileServer.ServeFileWriter: Context for file writer expired", "fileID", fileID)
 		}
 		fs.mu.Unlock()
 	}()
@@ -239,9 +244,9 @@ func (fs *FileServer) ServeFileWriter(ctx context.Context, fileID FileID, file i
 }
 
 // statFile attempts to stat the opened reader/writer to retrieve file information
-func (fs *FileServer) statFile(fileID FileID) (info FileInfo, err error) {
+func (fs *FileServer) statFile(fileID FileID) (FileInfo, error) {
 	if !fs.allowStat {
-		return info, ErrUnsupportedOperation
+		return FileInfo{}, ErrUnsupportedOperation
 	}
 
 	var handle interface{}
@@ -259,20 +264,20 @@ func (fs *FileServer) statFile(fileID FileID) (info FileInfo, err error) {
 	fs.mu.RUnlock()
 
 	if handle == nil {
-		return info, ErrUnknownFile
+		return FileInfo{}, ErrUnknownFile
 	}
 
 	file, ok := handle.(Statter)
 	if !ok {
-		return info, ErrUnsupportedOperation
+		return FileInfo{}, ErrUnsupportedOperation
 	}
 	fi, err := file.Stat()
 	if err != nil {
-		fs.Errorf("FileServer.statFile: Error statting handle %s: %v", fileID, err)
-		return info, err
+		fs.logger.Error("networkfile.FileServer.statFile: Error statting handle", "fileID", fileID, "error", err)
+		return FileInfo{}, err
 	}
 
-	info = GetFileInfo(fi)
+	info := GetFileInfo(fi)
 	if !fs.discloseFilenames {
 		info.FileName = string(fileID)
 	}
@@ -283,7 +288,7 @@ func (fs *FileServer) statFile(fileID FileID) (info FileInfo, err error) {
 func (fs *FileServer) handleFileOptions(resp http.ResponseWriter, fileID FileID) {
 	info, err := fs.statFile(fileID)
 	if err != nil {
-		fs.Debugf("FileServer.handleFileOptions: Error statting reader: %v", err)
+		fs.logger.Debug("networkfile.FileServer.handleFileOptions: Error statting reader", "error", err)
 		writeErrorToResponseWriter(resp, err)
 		return
 	}
@@ -293,13 +298,13 @@ func (fs *FileServer) handleFileOptions(resp http.ResponseWriter, fileID FileID)
 
 	data, err := json.Marshal(&info)
 	if err != nil {
-		fs.Errorf("FileServer.handleFileOptions: Error marshalling json: %v", err)
+		fs.logger.Error("networkfile.FileServer.handleFileOptions: Error marshalling json", "error", err)
 		resp.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 	_, err = resp.Write(data)
 	if err != nil {
-		fs.Errorf("FileServer.handleFileOptions: Error writing json: %v", err)
+		fs.logger.Error("networkfile.FileServer.handleFileOptions: Error writing json", "error", err)
 	}
 }
 
@@ -309,21 +314,22 @@ func (fs *FileServer) requestOffsetAndLength(resp http.ResponseWriter, req *http
 
 	matches, err := fmt.Sscanf(byteRange, "%d-%d", &offset, &length)
 	if err != nil || matches != 2 {
-		fs.Debugf("FileServer.requestOffsetAndLength: Error parsing range header (%s): %v", byteRange, err)
+		fs.logger.Debug("networkfile.FileServer.requestOffsetAndLength: Error parsing range header",
+			"byteRange", byteRange, "error", err)
 		resp.WriteHeader(http.StatusBadRequest)
 		_, _ = resp.Write([]byte("error parsing range header"))
 		return 0, 0, false
 	}
 
 	if offset < 0 {
-		fs.Debugf("FileServer.requestOffsetAndLength: Invalid offset (%d)", offset)
+		fs.logger.Debug("networkfile.FileServer.requestOffsetAndLength: Invalid offset", "offset", offset)
 		resp.WriteHeader(http.StatusBadRequest)
 		_, _ = resp.Write([]byte("invalid offset"))
 		return 0, 0, false
 	}
 
 	if length < MinumumBufferSize {
-		fs.Debugf("FileServer.requestOffsetAndLength: Invalid buffer length (%d)", length)
+		fs.logger.Debug("networkfile.FileServer.requestOffsetAndLength: Invalid buffer length", "length", length)
 		resp.WriteHeader(http.StatusBadRequest)
 		_, _ = resp.Write([]byte("invalid buffer length"))
 		return 0, 0, false
@@ -359,18 +365,20 @@ func (fs *FileServer) handleReadFile(resp http.ResponseWriter, req *http.Request
 	rdr := reader.New()
 	_, err := rdr.Seek(offset, io.SeekStart)
 	if err != nil {
-		fs.Errorf("FileServer.handleReadFile: Error seeking to offset %d: %v", offset, err)
+		fs.logger.Error("networkfile.FileServer.handleReadFile: Error seeking to offset",
+			"offset", offset, "error", err)
 		writeErrorToResponseWriter(resp, err)
 		return
 	}
 
 	n, err := io.Copy(resp, io.LimitReader(rdr, length))
 	if err != nil && !errors.Is(err, io.EOF) {
-		fs.Debugf("FileServer.handleReadFile: Error copying to response %s: %v", fileID, err)
+		fs.logger.Debug("networkfile.FileServer.handleReadFile: Error copying to response",
+			"fileID", fileID, "error", err)
 		return
 	}
 
-	fs.Debugf("FileServer.handleReadFile: Read %d bytes from offset %d from file %s [%v]", n, offset, fileID, err)
+	fs.logger.Debug("networkfile.FileServer.handleReadFile: Read bytes", "bytes", n, "offset", offset, "fileID", fileID, "error", err)
 }
 
 // handleWriteFile handles write http requests from the remote writer
@@ -390,29 +398,29 @@ func (fs *FileServer) handleWriteFile(resp http.ResponseWriter, req *http.Reques
 	}
 
 	wrtr := writer.New()
-	fs.Debugf("FileServer.handleWriteFile: Seeking to write position %d", offset)
+	fs.logger.Debug("networkfile.FileServer.handleWriteFile: Seeking", "offset", offset)
 	_, err := wrtr.Seek(offset, io.SeekStart)
 	if err != nil {
-		fs.Errorf("FileServer.handleWriteFile: Error seeking to write position %d: %v", offset, err)
+		fs.logger.Error("networkfile.FileServer.handleWriteFile: Error seeking", "offset", offset, "error", err)
 		writeErrorToResponseWriter(resp, err)
 		return
 	}
 
 	n, err := io.Copy(wrtr, req.Body)
 	if err != nil {
-		fs.Errorf("FileServer.handleWriteFile: Error writing to writer: %v", err)
+		fs.logger.Error("networkfile.FileServer.handleWriteFile: Error writing", "error", err)
 		writeErrorToResponseWriter(resp, err)
 		return
 	}
 
 	if n != length {
-		fs.Debugf("FileServer.handleWriteFile: Invalid body length (%d != %d)", n, length)
+		fs.logger.Debug("networkfile.FileServer.handleWriteFile: Invalid body length", "copied", n, "length", length)
 		resp.WriteHeader(http.StatusBadRequest)
 		_, _ = resp.Write([]byte("invalid body length"))
 		return
 	}
 
-	fs.Debugf("FileServer.handleWriteFile: Wrote %d bytes from offset %d in file %s", n, offset, fileID)
+	fs.logger.Debug("networkfile.FileServer.handleWriteFile: Wrote bytes", "bytes", n, "offset", offset, "fileID", fileID)
 
 	resp.Header().Set(HeaderRange, fmt.Sprintf("%d-%d", offset, n))
 	resp.WriteHeader(http.StatusNoContent)
@@ -438,12 +446,12 @@ func (fs *FileServer) handleFullWriteFile(resp http.ResponseWriter, req *http.Re
 
 	n, err := io.Copy(writer.wrtr, req.Body)
 	if err != nil {
-		fs.Errorf("FileServer.handleFullWriteFile: Error writing to writer %s: %v", fileID, err)
+		fs.logger.Error("networkfile.FileServer.handleFullWriteFile: Error writing to writer", "fileID", fileID, "error", err)
 		writeErrorToResponseWriter(resp, err)
 		return
 	}
 
-	fs.Debugf("FileServer.handleFullWriteFile: Wrote %d bytes", n)
+	fs.logger.Debug("networkfile.FileServer.handleFullWriteFile: Wrote bytes", "bytes", n)
 	resp.WriteHeader(http.StatusNoContent)
 }
 
@@ -480,10 +488,10 @@ func (fs *FileServer) closeReader(fileID FileID) bool {
 	if fs.closeReaders {
 		closer, ok := fs.readers[fileID].rdr.(io.Closer)
 		if ok {
-			fs.Debugf("FileServer.closeReader: Closer detected, closing: %s", fileID)
+			fs.logger.Debug("networkfile.FileServer.closeReader: Closer detected, closing", "fileID", fileID)
 			err := closer.Close()
 			if err != nil {
-				fs.Errorf("FileServer.closeReader: Error closing reader %s: %v", fileID, err)
+				fs.logger.Error("networkfile.FileServer.closeReader: Error closing reader", "fileID", fileID, "error", err)
 			}
 		}
 	}
@@ -501,10 +509,10 @@ func (fs *FileServer) closeWriter(fileID FileID) bool {
 	if fs.closeWriters {
 		closer, ok := fs.writers[fileID].wrtr.(io.Closer)
 		if ok {
-			fs.Debugf("FileServer.closeWriter: Closer detected, closing: %s", fileID)
+			fs.logger.Debug("networkfile.FileServer.closeWriter: Closer detected, closing", "fileID", fileID)
 			err := closer.Close()
 			if err != nil {
-				fs.Errorf("FileServer.closeWriter: Error closing writer %s: %v", fileID, err)
+				fs.logger.Error("networkfile.FileServer.closeWriter: Error closing writer", "fileID", fileID, "error", err)
 			}
 		}
 	}

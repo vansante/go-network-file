@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 )
 
@@ -23,6 +24,7 @@ func NewReader(ctx context.Context, baseURL, sharedSecret string, fileID FileID)
 			sharedSecret: sharedSecret,
 			fileID:       fileID,
 			offset:       0,
+			logger:       slog.Default(),
 		},
 	}
 }
@@ -37,6 +39,7 @@ func NewCustomClientReader(ctx context.Context, httpClient *http.Client, baseURL
 			sharedSecret: sharedSecret,
 			fileID:       fileID,
 			offset:       0,
+			logger:       slog.Default(),
 		},
 	}
 }
@@ -63,7 +66,7 @@ func (r *Reader) read(buf []byte, offset int64) (n int, err error) {
 
 	req, err := r.prepareRequest(http.MethodGet, url, nil)
 	if err != nil {
-		r.Errorf("Reader.read: Error creating request for %s: %v", r.fileID, err)
+		r.logger.Error("networkfile.Reader.read: Error creating request", "fileID", r.fileID, "error", err)
 		return 0, err
 	}
 	req.Header.Set(HeaderRange, fmt.Sprintf("%d-%d", offset, len(buf)))
@@ -71,9 +74,9 @@ func (r *Reader) read(buf []byte, offset int64) (n int, err error) {
 	resp, err := r.client.Do(req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			r.Infof("Reader.read: Context expired for %s: %v", r.fileID, err)
+			r.logger.Info("networkfile.Reader.read: Context expired", "fileID", r.fileID, "error", err)
 		} else {
-			r.Errorf("Reader.read: Error executing request for %s: %v", r.fileID, err)
+			r.logger.Error("networkfile.Reader.read: Error executing request", "fileID", r.fileID, "error", err)
 		}
 		return 0, err
 	}
@@ -83,7 +86,7 @@ func (r *Reader) read(buf []byte, offset int64) (n int, err error) {
 
 	err = responseCodeToError(resp, http.StatusPartialContent)
 	if err != nil {
-		r.Infof("Reader.read: A remote error occurred for %s: %v", r.fileID, err)
+		r.logger.Info("networkfile.Reader.read: A remote error occurred", "fileID", r.fileID, "error", err)
 		return 0, err
 	}
 
@@ -96,9 +99,9 @@ func (r *Reader) read(buf []byte, offset int64) (n int, err error) {
 
 	if err != nil && !errors.Is(err, io.EOF) {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			r.Infof("Reader.read: Context expired for %s: %v", r.fileID, err)
+			r.logger.Info("networkfile.Reader.read: Context expired", "fileID", r.fileID, "error", err)
 		} else {
-			r.Errorf("Reader.read: Error reading http body for %s: %v", r.fileID, err)
+			r.logger.Error("networkfile.Reader.read: Error reading http body", "fileID", r.fileID, "error", err)
 		}
 		return n, err
 	}

@@ -14,7 +14,6 @@ import (
 
 func TestWriterCopyFile(t *testing.T) {
 	srv := NewFileServer(secret)
-	srv.SetLogger(&testLogger{t})
 
 	socket := newSocketPath()
 	sock, err := net.Listen("unix", socket)
@@ -37,7 +36,6 @@ func TestWriterCopyFile(t *testing.T) {
 	assert.NoError(t, err)
 
 	wrtr := NewCustomClientWriter(context.Background(), newHTTPUnixClient(socket), "http://server", secret, fileID)
-	wrtr.SetLogger(&testLogger{t})
 
 	src, err := randomFile(117)
 	assert.NoError(t, err)
@@ -68,7 +66,6 @@ func TestWriterCopyFile(t *testing.T) {
 
 func TestWriterCopyFileLargeBuffer(t *testing.T) {
 	srv := NewFileServer(secret)
-	srv.SetLogger(&testLogger{t})
 
 	socket := newSocketPath()
 	sock, err := net.Listen("unix", socket)
@@ -91,7 +88,6 @@ func TestWriterCopyFileLargeBuffer(t *testing.T) {
 	assert.NoError(t, err)
 
 	wrtr := NewCustomClientWriter(context.Background(), newHTTPUnixClient(socket), "http://server", secret, fileID)
-	wrtr.SetLogger(&testLogger{t})
 
 	src, err := randomFile(17_177_717)
 	assert.NoError(t, err)
@@ -122,7 +118,6 @@ func TestWriterCopyFileLargeBuffer(t *testing.T) {
 
 func TestPutRequest(t *testing.T) {
 	srv := NewFileServer(secret)
-	srv.SetLogger(&testLogger{t})
 
 	socket := newSocketPath()
 	sock, err := net.Listen("unix", socket)
@@ -146,7 +141,6 @@ func TestPutRequest(t *testing.T) {
 
 	client := newHTTPUnixClient(socket)
 	wrtr := NewCustomClientWriter(context.Background(), client, "http://server", secret, fileID)
-	wrtr.SetLogger(&testLogger{t})
 
 	src, err := randomFile(133_799)
 	assert.NoError(t, err)

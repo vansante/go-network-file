@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 )
 
@@ -23,6 +24,7 @@ func NewWriter(ctx context.Context, baseURL, sharedSecret string, fileID FileID)
 			sharedSecret: sharedSecret,
 			fileID:       fileID,
 			offset:       0,
+			logger:       slog.Default(),
 		},
 	}
 }
@@ -37,6 +39,7 @@ func NewCustomClientWriter(ctx context.Context, httpClient *http.Client, baseURL
 			sharedSecret: sharedSecret,
 			fileID:       fileID,
 			offset:       0,
+			logger:       slog.Default(),
 		},
 	}
 }
@@ -63,7 +66,7 @@ func (w *Writer) write(buf []byte, offset int64) (n int, err error) {
 
 	req, err := w.prepareRequest(http.MethodPatch, url, bytes.NewReader(buf))
 	if err != nil {
-		w.Errorf("Writer.write: Error creating request for %s: %v", w.fileID, err)
+		w.logger.Error("networkfile.Writer.write: Error creating request", "fileID", w.fileID, "error", err)
 		return 0, err
 	}
 	req.Header.Set(HeaderRange, fmt.Sprintf("%d-%d", offset, len(buf)))
@@ -71,9 +74,9 @@ func (w *Writer) write(buf []byte, offset int64) (n int, err error) {
 	resp, err := w.client.Do(req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			w.Infof("Writer.write: Context expired for %s: %v", w.fileID, err)
+			w.logger.Info("networkfile.Writer.write: Context expired", "fileID", w.fileID, "logger", err)
 		} else {
-			w.Errorf("Writer.write: Error executing request for %s: %v", w.fileID, err)
+			w.logger.Error("networkfile.Writer.write: Error executing request", "fileID", w.fileID, "error", err)
 		}
 		return 0, err
 	}
@@ -83,27 +86,30 @@ func (w *Writer) write(buf []byte, offset int64) (n int, err error) {
 
 	err = responseCodeToError(resp, http.StatusNoContent)
 	if err != nil {
-		w.Infof("Writer.write: A remote error occurred for %s: %v", w.fileID, err)
+		w.logger.Info("networkfile.Writer.write: A remote error occurred", "fileID", w.fileID, "error", err)
 		return 0, err
 	}
 
 	var servOffset, servLength int64
 	matches, err := fmt.Sscanf(resp.Header.Get(HeaderRange), "%d-%d", &servOffset, &servLength)
 	if err != nil || matches != 2 {
-		w.Errorf("Writer.write: Error parsing range header (%s) for %s: %v", resp.Header.Get(HeaderRange), w.fileID, err)
+		w.logger.Error("networkfile.Writer.write: Error parsing range header",
+			"range", resp.Header.Get(HeaderRange), "fileID", w.fileID, "error", err)
 		return 0, err
 	}
 
 	if servOffset != offset {
-		w.Errorf("Writer.write: Server returned unexpected offset (%d != %d) for %s", offset, servOffset, w.fileID)
+		w.logger.Error("networkfile.Writer.write: Server returned unexpected offset",
+			"offset", offset, "serverOffset", servOffset, "fileID", w.fileID)
 		return 0, errors.New("unexpected server offset")
 	}
 
 	if servLength != int64(len(buf)) {
-		w.Errorf("Writer.write: Server returned unexpected length (%d != %d) for %s", len(buf), servLength, w.fileID)
+		w.logger.Error("networkfile.Writer.write: Server returned unexpected length",
+			"length", len(buf), "serverLength", servLength, "fileID", w.fileID)
 		return 0, errors.New("unexpected server length")
 	}
 
-	w.Debugf("Writer.write: Wrote %d bytes from offset %d for %s", len(buf), offset, w.fileID)
+	w.logger.Debug("networkfile.Writer.write: Wrote bytes", "length", len(buf), "offset", offset, "fileID", w.fileID)
 	return int(servLength), nil
 }

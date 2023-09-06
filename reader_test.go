@@ -62,7 +62,6 @@ func newHTTPUnixClient(socket string) *http.Client {
 
 func TestReaderCopyFile(t *testing.T) {
 	srv := NewFileServer(secret)
-	srv.SetLogger(&testLogger{t})
 
 	socket := newSocketPath()
 	sock, err := net.Listen("unix", socket)
@@ -71,8 +70,6 @@ func TestReaderCopyFile(t *testing.T) {
 		err = srv.Serve(sock)
 		assert.EqualValues(t, http.ErrServerClosed, err)
 	}()
-
-	srv.SetLogger(&testLogger{t})
 
 	fileID, err := RandomFileID()
 	assert.NoError(t, err)
@@ -86,7 +83,6 @@ func TestReaderCopyFile(t *testing.T) {
 	err = srv.ServeFileReader(context.Background(), fileID, src)
 
 	rdr := NewCustomClientReader(context.Background(), newHTTPUnixClient(socket), "http://server", secret, fileID)
-	rdr.SetLogger(&testLogger{t})
 
 	dst, err := ioutil.TempFile(os.TempDir(), "reader-copy-test-")
 	assert.Nil(t, err)
@@ -117,7 +113,6 @@ func TestReaderCopyFile(t *testing.T) {
 
 func TestReaderCopySingleCall(t *testing.T) {
 	srv := NewFileServer(secret)
-	srv.SetLogger(&testLogger{t})
 
 	socket := newSocketPath()
 	sock, err := net.Listen("unix", socket)
@@ -126,8 +121,6 @@ func TestReaderCopySingleCall(t *testing.T) {
 		err = srv.Serve(sock)
 		assert.EqualValues(t, http.ErrServerClosed, err)
 	}()
-
-	srv.SetLogger(&testLogger{t})
 
 	fileID, err := RandomFileID()
 	assert.NoError(t, err)
@@ -141,7 +134,6 @@ func TestReaderCopySingleCall(t *testing.T) {
 	err = srv.ServeFileReader(context.Background(), fileID, src)
 
 	rdr := NewCustomClientReader(context.Background(), newHTTPUnixClient(socket), "http://server", secret, fileID)
-	rdr.SetLogger(&testLogger{t})
 	dst, err := ioutil.TempFile(os.TempDir(), "reader-single-copy-test-")
 	assert.NoError(t, err)
 	defer func() {
@@ -171,7 +163,6 @@ func TestReaderCopySingleCall(t *testing.T) {
 
 func TestReaderSeek(t *testing.T) {
 	srv := NewFileServer(secret)
-	srv.SetLogger(&testLogger{t})
 
 	socket := newSocketPath()
 	sock, err := net.Listen("unix", socket)
@@ -180,8 +171,6 @@ func TestReaderSeek(t *testing.T) {
 		err = srv.Serve(sock)
 		assert.EqualValues(t, http.ErrServerClosed, err)
 	}()
-
-	srv.SetLogger(&testLogger{t})
 
 	fileID, err := RandomFileID()
 	assert.NoError(t, err)
@@ -196,7 +185,6 @@ func TestReaderSeek(t *testing.T) {
 	err = srv.ServeFileReader(context.Background(), fileID, src)
 
 	rdr := NewCustomClientReader(context.Background(), newHTTPUnixClient(socket), "http://server", secret, fileID)
-	rdr.SetLogger(&testLogger{t})
 
 	off, err := rdr.Seek(2, io.SeekStart)
 	assert.NoError(t, err)
@@ -232,7 +220,6 @@ func TestReaderSeek(t *testing.T) {
 
 func TestFullGetRead(t *testing.T) {
 	srv := NewFileServer(secret)
-	srv.SetLogger(&testLogger{t})
 
 	socket := newSocketPath()
 	sock, err := net.Listen("unix", socket)
@@ -241,8 +228,6 @@ func TestFullGetRead(t *testing.T) {
 		err = srv.Serve(sock)
 		assert.EqualValues(t, http.ErrServerClosed, err)
 	}()
-
-	srv.SetLogger(&testLogger{t})
 
 	fileID, err := RandomFileID()
 	assert.NoError(t, err)
@@ -270,7 +255,6 @@ func TestFullGetRead(t *testing.T) {
 
 func TestMultipleFullGetRead(t *testing.T) {
 	srv := NewFileServer(secret)
-	srv.SetLogger(&testLogger{t})
 
 	socket := newSocketPath()
 	sock, err := net.Listen("unix", socket)
@@ -279,8 +263,6 @@ func TestMultipleFullGetRead(t *testing.T) {
 		err = srv.Serve(sock)
 		assert.EqualValues(t, http.ErrServerClosed, err)
 	}()
-
-	srv.SetLogger(&testLogger{t})
 
 	fileID, err := RandomFileID()
 	assert.NoError(t, err)
@@ -313,7 +295,6 @@ func TestMultipleFullGetRead(t *testing.T) {
 
 func TestReaderContextExpires(t *testing.T) {
 	srv := NewFileServer(secret)
-	srv.SetLogger(&testLogger{t})
 
 	socket := newSocketPath()
 	sock, err := net.Listen("unix", socket)
@@ -322,8 +303,6 @@ func TestReaderContextExpires(t *testing.T) {
 		err = srv.Serve(sock)
 		assert.EqualValues(t, http.ErrServerClosed, err)
 	}()
-
-	srv.SetLogger(&testLogger{t})
 
 	fileID, err := RandomFileID()
 	assert.NoError(t, err)
@@ -347,7 +326,6 @@ func TestReaderContextExpires(t *testing.T) {
 
 func TestReaderBadSecret(t *testing.T) {
 	srv := NewFileServer(secret)
-	srv.SetLogger(&testLogger{t})
 
 	socket := newSocketPath()
 	sock, err := net.Listen("unix", socket)
@@ -359,7 +337,6 @@ func TestReaderBadSecret(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	rdr := NewCustomClientReader(context.Background(), newHTTPUnixClient(socket), "http://server", "wrong", "test")
-	rdr.SetLogger(&testLogger{t})
 	n, err := rdr.Read(make([]byte, 11))
 	assert.EqualValues(t, 0, n)
 	assert.Equal(t, ErrUnauthorized, err)
@@ -370,7 +347,6 @@ func TestReaderBadSecret(t *testing.T) {
 
 func TestReaderUnknownFile(t *testing.T) {
 	srv := NewFileServer(secret)
-	srv.SetLogger(&testLogger{t})
 
 	socket := newSocketPath()
 	sock, err := net.Listen("unix", socket)
@@ -382,7 +358,6 @@ func TestReaderUnknownFile(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	rdr := NewCustomClientReader(context.Background(), newHTTPUnixClient(socket), "http://server", secret, "test")
-	rdr.SetLogger(&testLogger{t})
 	n, err := rdr.Read(make([]byte, 11))
 	assert.EqualValues(t, 0, n)
 	assert.Equal(t, ErrUnknownFile, err)
@@ -393,7 +368,6 @@ func TestReaderUnknownFile(t *testing.T) {
 
 func TestReaderLargeFile(t *testing.T) {
 	srv := NewFileServer(secret)
-	srv.SetLogger(&testLogger{t})
 
 	sock, err := net.Listen("tcp", ":1337")
 	assert.NoError(t, err)
@@ -401,8 +375,6 @@ func TestReaderLargeFile(t *testing.T) {
 		err = srv.Serve(sock)
 		assert.EqualValues(t, http.ErrServerClosed, err)
 	}()
-
-	srv.SetLogger(&testLogger{t})
 
 	fileID, err := RandomFileID()
 	assert.NoError(t, err)
@@ -416,7 +388,6 @@ func TestReaderLargeFile(t *testing.T) {
 	err = srv.ServeFileReader(context.Background(), fileID, src)
 
 	rdr := NewReader(context.Background(), "http://localhost:1337", secret, fileID)
-	rdr.SetLogger(&testLogger{t})
 	dst, err := ioutil.TempFile(os.TempDir(), "reader-single-copy-test-")
 	assert.NoError(t, err)
 	defer func() {
@@ -435,15 +406,15 @@ type testLogger struct {
 
 func (tl *testLogger) Debugf(format string, args ...interface{}) {
 	log.Printf("[DEBUG] "+format, args...)
-	//tl.Logf("[DEBUG] "+format, args...)
+	// tl.Logf("[DEBUG] "+format, args...)
 }
 
 func (tl *testLogger) Infof(format string, args ...interface{}) {
 	log.Printf("[INFO] "+format, args...)
-	//tl.Logf("[INFO] "+format, args...)
+	// tl.Logf("[INFO] "+format, args...)
 }
 
 func (tl *testLogger) Errorf(format string, args ...interface{}) {
 	log.Printf("[ERROR] "+format, args...)
-	//tl.Logf("[ERROR] "+format, args...)
+	// tl.Logf("[ERROR] "+format, args...)
 }

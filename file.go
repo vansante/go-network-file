@@ -6,19 +6,25 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 )
 
 // file is the base file for the remote file handles
 type file struct {
-	embedLogger
 	client       *http.Client
 	ctx          context.Context
 	baseURL      string
 	sharedSecret string
 	fileID       FileID
 	offset       int64
+	logger       *slog.Logger
+}
+
+// SetLogger sets a new structured logger, replacing the default slog logger
+func (f *file) SetLogger(logger *slog.Logger) {
+	f.logger = logger
 }
 
 // Seek seeks to the given offset from the given mode
@@ -51,7 +57,7 @@ func (f *file) SharedSecret() string {
 }
 
 // Stat returns the remote file information
-func (f *file) Stat() (fi os.FileInfo, err error) {
+func (f *file) Stat() (os.FileInfo, error) {
 	info, err := f.stat()
 	if err != nil {
 		return nil, err
@@ -60,12 +66,14 @@ func (f *file) Stat() (fi os.FileInfo, err error) {
 }
 
 // Close tells the server to close the remote file
-func (f *file) Close() (err error) {
+func (f *file) Close() error {
 	return f.close()
 }
 
 // prepareRequest prepares a new HTTP request
-func (f *file) prepareRequest(method, url string, body io.Reader) (req *http.Request, err error) {
+func (f *file) prepareRequest(method, url string, body io.Reader) (*http.Request, error) {
+	var req *http.Request
+	var err error
 	if f.ctx == nil {
 		req, err = http.NewRequest(method, url, body)
 	} else {
@@ -79,20 +87,22 @@ func (f *file) prepareRequest(method, url string, body io.Reader) (req *http.Req
 }
 
 // stat returns the remote file information
-func (f *file) stat() (fi FileInfo, err error) {
+func (f *file) stat() (FileInfo, error) {
+	fi := FileInfo{}
+
 	url := fmt.Sprintf("%s/%s", f.baseURL, f.fileID)
 	req, err := f.prepareRequest(http.MethodOptions, url, nil)
 	if err != nil {
-		f.Errorf("file.stat: Error creating request for %s: %v", f.fileID, err)
+		f.logger.Error("networkfile.File.stat: Error creating request", "fileID", f.fileID, "error", err)
 		return fi, err
 	}
 
 	resp, err := f.client.Do(req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			f.Infof("file.stat: Context expired for %s: %v", f.fileID, err)
+			f.logger.Info("networkfile.File.stat: Context expired", "fileID", f.fileID, "error", err)
 		} else {
-			f.Errorf("file.stat: Error executing request for %s: %v", f.fileID, err)
+			f.logger.Error("networkfile.File.stat: Error executing request", "fileID", f.fileID, "error", err)
 		}
 		return fi, err
 	}
@@ -102,36 +112,36 @@ func (f *file) stat() (fi FileInfo, err error) {
 
 	err = responseCodeToError(resp, http.StatusOK)
 	if err != nil {
-		f.Infof("file.stat: A remote error occurred for %s: %v", f.fileID, err)
+		f.logger.Info("networkfile.File.stat: A remote error occurred", "fileID", f.fileID, "error", err)
 		return fi, err
 	}
 
 	decoder := json.NewDecoder(resp.Body)
 	err = decoder.Decode(&fi)
 	if err != nil {
-		f.Errorf("file.stat: Error decoding file info for %s: %v", f.fileID, err)
+		f.logger.Error("networkfile.File.stat: Error decoding file info", "fileID", f.fileID, "error", err)
 		return fi, err
 	}
 
-	f.Debugf("file.stat: File info for %s: %v", f.fileID, fi)
+	f.logger.Debug("networkfile.File.stat: File info", "fileID", f.fileID, "fileInfo", fi)
 	return fi, nil
 }
 
 // close tells the remote server to close the file
-func (f *file) close() (err error) {
+func (f *file) close() error {
 	url := fmt.Sprintf("%s/%s", f.baseURL, f.fileID)
 	req, err := f.prepareRequest(http.MethodDelete, url, nil)
 	if err != nil {
-		f.Errorf("file.close: Error creating request: %v", err)
+		f.logger.Error("networkfile.File.close: Error creating request", "error", err)
 		return err
 	}
 
 	resp, err := f.client.Do(req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			f.Infof("file.close: Context expired for %s: %v", f.fileID, err)
+			f.logger.Info("networkfile.File.close: Context expired", "fileID", f.fileID, "error", err)
 		} else {
-			f.Errorf("file.close: Error executing request for %s: %v", f.fileID, err)
+			f.logger.Error("networkfile.File.close: Error executing request", "fileID", f.fileID, "error", err)
 		}
 		return err
 	}
@@ -139,10 +149,10 @@ func (f *file) close() (err error) {
 
 	err = responseCodeToError(resp, http.StatusNoContent)
 	if err != nil {
-		f.Infof("file.close: A remote error occurred for %s: %v", f.fileID, err)
+		f.logger.Info("networkfile.File.close: A remote error occurred", "fileID", f.fileID, "error", err)
 		return err
 	}
 
-	f.Debugf("file.close: The remote file %s was closed", f.fileID)
+	f.logger.Debug("networkfile.File.close: The remote file was closed", "fileID", f.fileID)
 	return nil
 }
