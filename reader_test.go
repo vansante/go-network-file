@@ -5,12 +5,9 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
-	"math"
-	"math/big"
-	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -19,6 +16,7 @@ import (
 )
 
 const (
+	prefix = "/Test"
 	secret = "blurp"
 )
 
@@ -43,34 +41,9 @@ func randomFile(size int) (*os.File, error) {
 	return file, err
 }
 
-func newSocketPath() string {
-	rnd, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt))
-	if err != nil {
-		panic(err)
-	}
-	return filepath.Join(os.TempDir(), fmt.Sprintf("testsock-%d", rnd))
-}
-
-func newHTTPUnixClient(socket string) *http.Client {
-	return &http.Client{
-		Transport: &http.Transport{
-			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-				return net.Dial("unix", socket)
-			},
-		},
-	}
-}
-
 func TestReaderCopyFile(t *testing.T) {
-	srv := NewFileServer(secret)
-
-	socket := newSocketPath()
-	sock, err := net.Listen("unix", socket)
-	assert.NoError(t, err)
-	go func() {
-		err = srv.Serve(sock)
-		assert.EqualValues(t, http.ErrServerClosed, err)
-	}()
+	srv := NewFileServer(prefix, secret)
+	testServer := httptest.NewServer(srv)
 
 	fileID, err := RandomFileID()
 	assert.NoError(t, err)
@@ -83,7 +56,7 @@ func TestReaderCopyFile(t *testing.T) {
 
 	err = srv.ServeFileReader(context.Background(), fileID, src)
 
-	rdr := NewCustomClientReader(context.Background(), newHTTPUnixClient(socket), "http://server", secret, fileID)
+	rdr := NewReader(context.Background(), testServer.URL+prefix, secret, fileID)
 
 	dst, err := os.CreateTemp(os.TempDir(), "reader-copy-test-")
 	assert.Nil(t, err)
@@ -109,19 +82,11 @@ func TestReaderCopyFile(t *testing.T) {
 	assert.EqualValues(t, srcBuf, dstBuf)
 
 	assert.NoError(t, rdr.Close())
-	assert.NoError(t, srv.Shutdown(context.Background()))
 }
 
 func TestReaderCopySingleCall(t *testing.T) {
-	srv := NewFileServer(secret)
-
-	socket := newSocketPath()
-	sock, err := net.Listen("unix", socket)
-	assert.NoError(t, err)
-	go func() {
-		err = srv.Serve(sock)
-		assert.EqualValues(t, http.ErrServerClosed, err)
-	}()
+	srv := NewFileServer(prefix, secret)
+	testServer := httptest.NewServer(srv)
 
 	fileID, err := RandomFileID()
 	assert.NoError(t, err)
@@ -134,7 +99,7 @@ func TestReaderCopySingleCall(t *testing.T) {
 
 	err = srv.ServeFileReader(context.Background(), fileID, src)
 
-	rdr := NewCustomClientReader(context.Background(), newHTTPUnixClient(socket), "http://server", secret, fileID)
+	rdr := NewReader(context.Background(), testServer.URL+prefix, secret, fileID)
 	dst, err := os.CreateTemp(os.TempDir(), "reader-single-copy-test-")
 	assert.NoError(t, err)
 	defer func() {
@@ -159,19 +124,11 @@ func TestReaderCopySingleCall(t *testing.T) {
 	assert.EqualValues(t, srcBuf, dstBuf)
 
 	assert.NoError(t, rdr.Close())
-	assert.NoError(t, srv.Shutdown(context.Background()))
 }
 
 func TestReaderSeek(t *testing.T) {
-	srv := NewFileServer(secret)
-
-	socket := newSocketPath()
-	sock, err := net.Listen("unix", socket)
-	assert.NoError(t, err)
-	go func() {
-		err = srv.Serve(sock)
-		assert.EqualValues(t, http.ErrServerClosed, err)
-	}()
+	srv := NewFileServer(prefix, secret)
+	testServer := httptest.NewServer(srv)
 
 	fileID, err := RandomFileID()
 	assert.NoError(t, err)
@@ -185,7 +142,7 @@ func TestReaderSeek(t *testing.T) {
 
 	err = srv.ServeFileReader(context.Background(), fileID, src)
 
-	rdr := NewCustomClientReader(context.Background(), newHTTPUnixClient(socket), "http://server", secret, fileID)
+	rdr := NewReader(context.Background(), testServer.URL+prefix, secret, fileID)
 
 	off, err := rdr.Seek(2, io.SeekStart)
 	assert.NoError(t, err)
@@ -216,19 +173,11 @@ func TestReaderSeek(t *testing.T) {
 	assert.EqualValues(t, srcBuf[183-37:183-37+11], buf)
 
 	assert.NoError(t, rdr.Close())
-	assert.NoError(t, srv.Shutdown(context.Background()))
 }
 
 func TestFullGetRead(t *testing.T) {
-	srv := NewFileServer(secret)
-
-	socket := newSocketPath()
-	sock, err := net.Listen("unix", socket)
-	assert.NoError(t, err)
-	go func() {
-		err = srv.Serve(sock)
-		assert.EqualValues(t, http.ErrServerClosed, err)
-	}()
+	srv := NewFileServer(prefix, secret)
+	testServer := httptest.NewServer(srv)
 
 	fileID, err := RandomFileID()
 	assert.NoError(t, err)
@@ -238,9 +187,8 @@ func TestFullGetRead(t *testing.T) {
 	err = srv.ServeFileReader(context.Background(), fileID, src)
 	assert.NoError(t, err)
 
-	client := newHTTPUnixClient(socket)
-	rdr := NewCustomClientReader(context.Background(), client, "http://server", secret, fileID)
-	resp, err := client.Get(rdr.FullReadURL())
+	rdr := NewReader(context.Background(), testServer.URL+prefix, secret, fileID)
+	resp, err := http.DefaultClient.Get(rdr.FullReadURL())
 	assert.NoError(t, err)
 
 	_, err = src.Seek(0, io.SeekStart)
@@ -255,15 +203,8 @@ func TestFullGetRead(t *testing.T) {
 }
 
 func TestMultipleFullGetRead(t *testing.T) {
-	srv := NewFileServer(secret)
-
-	socket := newSocketPath()
-	sock, err := net.Listen("unix", socket)
-	assert.NoError(t, err)
-	go func() {
-		err = srv.Serve(sock)
-		assert.EqualValues(t, http.ErrServerClosed, err)
-	}()
+	srv := NewFileServer(prefix, secret)
+	testServer := httptest.NewServer(srv)
 
 	fileID, err := RandomFileID()
 	assert.NoError(t, err)
@@ -277,9 +218,8 @@ func TestMultipleFullGetRead(t *testing.T) {
 	wg.Add(100)
 	for i := 0; i < 100; i++ {
 		go func() {
-			client := newHTTPUnixClient(socket)
-			rdr := NewCustomClientReader(context.Background(), client, "http://server", secret, fileID)
-			resp, err := client.Get(rdr.FullReadURL())
+			rdr := NewReader(context.Background(), testServer.URL+prefix, secret, fileID)
+			resp, err := http.DefaultClient.Get(rdr.FullReadURL())
 			assert.NoError(t, err)
 			if err != nil {
 				return
@@ -295,15 +235,8 @@ func TestMultipleFullGetRead(t *testing.T) {
 }
 
 func TestReaderContextExpires(t *testing.T) {
-	srv := NewFileServer(secret)
-
-	socket := newSocketPath()
-	sock, err := net.Listen("unix", socket)
-	assert.NoError(t, err)
-	go func() {
-		err = srv.Serve(sock)
-		assert.EqualValues(t, http.ErrServerClosed, err)
-	}()
+	srv := NewFileServer(prefix, secret)
+	testServer := httptest.NewServer(srv)
 
 	fileID, err := RandomFileID()
 	assert.NoError(t, err)
@@ -317,8 +250,10 @@ func TestReaderContextExpires(t *testing.T) {
 	err = srv.ServeFileReader(ctx, fileID, src)
 	assert.NoError(t, err)
 
-	client := newHTTPUnixClient(socket)
-	resp, err := client.Get(fmt.Sprintf("http://server/%s?%s=%s", fileID, GETSharedSecret, secret))
+	time.Sleep(time.Millisecond) // More than a microsecond
+
+	resp, err := http.DefaultClient.Get(fmt.Sprintf("%s/%s?%s=%s",
+		testServer.URL+prefix, fileID, GETSharedSecret, secret))
 	assert.NoError(t, err)
 	_ = resp.Body.Close()
 
@@ -326,56 +261,32 @@ func TestReaderContextExpires(t *testing.T) {
 }
 
 func TestReaderBadSecret(t *testing.T) {
-	srv := NewFileServer(secret)
+	srv := NewFileServer("", secret)
+	testServer := httptest.NewServer(srv)
 
-	socket := newSocketPath()
-	sock, err := net.Listen("unix", socket)
-	assert.NoError(t, err)
-	go func() {
-		err = srv.Serve(sock)
-		assert.EqualValues(t, http.ErrServerClosed, err)
-	}()
-	time.Sleep(100 * time.Millisecond)
-
-	rdr := NewCustomClientReader(context.Background(), newHTTPUnixClient(socket), "http://server", "wrong", "test")
+	rdr := NewReader(context.Background(), testServer.URL, "wrong", "test")
 	n, err := rdr.Read(make([]byte, 11))
 	assert.EqualValues(t, 0, n)
 	assert.Equal(t, ErrUnauthorized, err)
 
 	assert.Error(t, rdr.Close())
-	assert.NoError(t, srv.Shutdown(context.Background()))
 }
 
 func TestReaderUnknownFile(t *testing.T) {
-	srv := NewFileServer(secret)
+	srv := NewFileServer("", secret)
+	testServer := httptest.NewServer(srv)
 
-	socket := newSocketPath()
-	sock, err := net.Listen("unix", socket)
-	assert.NoError(t, err)
-	go func() {
-		err = srv.Serve(sock)
-		assert.EqualValues(t, http.ErrServerClosed, err)
-	}()
-	time.Sleep(100 * time.Millisecond)
-
-	rdr := NewCustomClientReader(context.Background(), newHTTPUnixClient(socket), "http://server", secret, "test")
+	rdr := NewReader(context.Background(), testServer.URL, secret, "test")
 	n, err := rdr.Read(make([]byte, 11))
 	assert.EqualValues(t, 0, n)
 	assert.Equal(t, ErrUnknownFile, err)
 
 	assert.Error(t, rdr.Close())
-	assert.NoError(t, srv.Shutdown(context.Background()))
 }
 
 func TestReaderLargeFile(t *testing.T) {
-	srv := NewFileServer(secret)
-
-	sock, err := net.Listen("tcp", ":1337")
-	assert.NoError(t, err)
-	go func() {
-		err = srv.Serve(sock)
-		assert.EqualValues(t, http.ErrServerClosed, err)
-	}()
+	srv := NewFileServer("", secret)
+	testServer := httptest.NewServer(srv)
 
 	fileID, err := RandomFileID()
 	assert.NoError(t, err)
@@ -388,7 +299,7 @@ func TestReaderLargeFile(t *testing.T) {
 
 	err = srv.ServeFileReader(context.Background(), fileID, src)
 
-	rdr := NewReader(context.Background(), "http://localhost:1337", secret, fileID)
+	rdr := NewReader(context.Background(), testServer.URL, secret, fileID)
 	dst, err := os.CreateTemp(os.TempDir(), "reader-single-copy-test-")
 	assert.NoError(t, err)
 	defer func() {

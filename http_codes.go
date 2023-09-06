@@ -60,7 +60,7 @@ func writeErrorToResponseWriter(rw http.ResponseWriter, err error) {
 }
 
 // responseCodeToError returns the right error from the given response
-func responseCodeToError(resp *http.Response, expected int) (err error) {
+func responseCodeToError(resp *http.Response, expected int) error {
 	if resp.StatusCode == expected {
 		return nil
 	}
@@ -74,7 +74,7 @@ func responseCodeToError(resp *http.Response, expected int) (err error) {
 	n, err := resp.Body.Read(buf)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return fmt.Errorf(
-			"%d: an unknown error occurred but the error could not be determined because: %v",
+			"%d: an unknown error occurred but the error could not be determined because: %w",
 			resp.StatusCode, err,
 		)
 	}
