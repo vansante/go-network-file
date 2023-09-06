@@ -1,4 +1,4 @@
-module github.com/vansante/go-network-file
+module gopkg.in/vansante/go-network-file.v2
 
 go 1.21
 
