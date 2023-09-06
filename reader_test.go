@@ -55,11 +55,12 @@ func TestReaderCopyFile(t *testing.T) {
 	}()
 
 	err = srv.ServeFileReader(context.Background(), fileID, src)
+	assert.NoError(t, err)
 
 	rdr := NewReader(context.Background(), testServer.URL+prefix, secret, fileID)
 
 	dst, err := os.CreateTemp(os.TempDir(), "reader-copy-test-")
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	defer func() {
 		_ = dst.Close()
 		_ = os.Remove(dst.Name())
@@ -98,6 +99,7 @@ func TestReaderCopySingleCall(t *testing.T) {
 	}()
 
 	err = srv.ServeFileReader(context.Background(), fileID, src)
+	assert.NoError(t, err)
 
 	rdr := NewReader(context.Background(), testServer.URL+prefix, secret, fileID)
 	dst, err := os.CreateTemp(os.TempDir(), "reader-single-copy-test-")
@@ -141,6 +143,7 @@ func TestReaderSeek(t *testing.T) {
 	assert.NoError(t, err)
 
 	err = srv.ServeFileReader(context.Background(), fileID, src)
+	assert.NoError(t, err)
 
 	rdr := NewReader(context.Background(), testServer.URL+prefix, secret, fileID)
 
@@ -188,7 +191,9 @@ func TestFullGetRead(t *testing.T) {
 	assert.NoError(t, err)
 
 	rdr := NewReader(context.Background(), testServer.URL+prefix, secret, fileID)
-	resp, err := http.DefaultClient.Get(rdr.FullReadURL())
+	req, err := http.NewRequest(http.MethodGet, rdr.FullReadURL(), nil) // nolint:noctx
+	assert.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
 	assert.NoError(t, err)
 
 	_, err = src.Seek(0, io.SeekStart)
@@ -197,6 +202,7 @@ func TestFullGetRead(t *testing.T) {
 	assert.NoError(t, err)
 
 	file, err := io.ReadAll(resp.Body)
+	assert.NoError(t, err)
 	_ = resp.Body.Close()
 
 	assert.EqualValues(t, file, srcBuf)
@@ -219,7 +225,9 @@ func TestMultipleFullGetRead(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		go func() {
 			rdr := NewReader(context.Background(), testServer.URL+prefix, secret, fileID)
-			resp, err := http.DefaultClient.Get(rdr.FullReadURL())
+			req, err := http.NewRequest(http.MethodGet, rdr.FullReadURL(), nil) // nolint:noctx
+			assert.NoError(t, err)
+			resp, err := http.DefaultClient.Do(req)
 			assert.NoError(t, err)
 			if err != nil {
 				return
@@ -252,8 +260,10 @@ func TestReaderContextExpires(t *testing.T) {
 
 	time.Sleep(time.Millisecond) // More than a microsecond
 
-	resp, err := http.DefaultClient.Get(fmt.Sprintf("%s/%s?%s=%s",
-		testServer.URL+prefix, fileID, GETSharedSecret, secret))
+	url := fmt.Sprintf("%s/%s?%s=%s", testServer.URL+prefix, fileID, GETSharedSecret, secret)
+	req, err := http.NewRequest(http.MethodGet, url, nil) // nolint:noctx
+	assert.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
 	assert.NoError(t, err)
 	_ = resp.Body.Close()
 
@@ -298,6 +308,7 @@ func TestReaderLargeFile(t *testing.T) {
 	}()
 
 	err = srv.ServeFileReader(context.Background(), fileID, src)
+	assert.NoError(t, err)
 
 	rdr := NewReader(context.Background(), testServer.URL, secret, fileID)
 	dst, err := os.CreateTemp(os.TempDir(), "reader-single-copy-test-")

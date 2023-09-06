@@ -64,7 +64,7 @@ func (r *Reader) ReadAt(buf []byte, offset int64) (n int, err error) {
 func (r *Reader) read(buf []byte, offset int64) (n int, err error) {
 	url := fmt.Sprintf("%s/%s", r.baseURL, r.fileID)
 
-	req, err := r.prepareRequest(http.MethodGet, url, nil)
+	req, err := r.prepareRequest(http.MethodGet, url, nil) // nolint:noctx
 	if err != nil {
 		r.logger.Error("networkfile.Reader.read: Error creating request", "fileID", r.fileID, "error", err)
 		return 0, err

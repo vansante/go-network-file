@@ -64,7 +64,7 @@ func (w *Writer) WriteAt(buf []byte, offset int64) (n int, err error) {
 func (w *Writer) write(buf []byte, offset int64) (n int, err error) {
 	url := fmt.Sprintf("%s/%s", w.baseURL, w.fileID)
 
-	req, err := w.prepareRequest(http.MethodPatch, url, bytes.NewReader(buf))
+	req, err := w.prepareRequest(http.MethodPatch, url, bytes.NewReader(buf)) // nolint:noctx
 	if err != nil {
 		w.logger.Error("networkfile.Writer.write: Error creating request", "fileID", w.fileID, "error", err)
 		return 0, err

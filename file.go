@@ -91,7 +91,7 @@ func (f *file) stat() (FileInfo, error) {
 	fi := FileInfo{}
 
 	url := fmt.Sprintf("%s/%s", f.baseURL, f.fileID)
-	req, err := f.prepareRequest(http.MethodOptions, url, nil)
+	req, err := f.prepareRequest(http.MethodOptions, url, nil) // nolint:noctx
 	if err != nil {
 		f.logger.Error("networkfile.File.stat: Error creating request", "fileID", f.fileID, "error", err)
 		return fi, err
@@ -130,7 +130,7 @@ func (f *file) stat() (FileInfo, error) {
 // close tells the remote server to close the file
 func (f *file) close() error {
 	url := fmt.Sprintf("%s/%s", f.baseURL, f.fileID)
-	req, err := f.prepareRequest(http.MethodDelete, url, nil)
+	req, err := f.prepareRequest(http.MethodDelete, url, nil) //nolint: noctx
 	if err != nil {
 		f.logger.Error("networkfile.File.close: Error creating request", "error", err)
 		return err
