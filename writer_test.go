@@ -3,8 +3,8 @@ package networkfile
 import (
 	"context"
 	"io"
-	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 
@@ -12,15 +12,8 @@ import (
 )
 
 func TestWriterCopyFile(t *testing.T) {
-	srv := NewFileServer(secret)
-
-	socket := newSocketPath()
-	sock, err := net.Listen("unix", socket)
-	assert.NoError(t, err)
-	go func() {
-		err = srv.Serve(sock)
-		assert.EqualValues(t, http.ErrServerClosed, err)
-	}()
+	srv := NewFileServer(prefix, secret)
+	testServer := httptest.NewServer(srv)
 
 	fileID, err := RandomFileID()
 	assert.NoError(t, err)
@@ -34,7 +27,7 @@ func TestWriterCopyFile(t *testing.T) {
 	err = srv.ServeFileWriter(context.Background(), fileID, dst)
 	assert.NoError(t, err)
 
-	wrtr := NewCustomClientWriter(context.Background(), newHTTPUnixClient(socket), "http://server", secret, fileID)
+	wrtr := NewWriter(context.Background(), testServer.URL+prefix, secret, fileID)
 
 	src, err := randomFile(117)
 	assert.NoError(t, err)
@@ -60,19 +53,11 @@ func TestWriterCopyFile(t *testing.T) {
 	assert.EqualValues(t, srcBuf, dstBuf)
 
 	assert.NoError(t, wrtr.Close())
-	assert.NoError(t, srv.Shutdown(context.Background()))
 }
 
 func TestWriterCopyFileLargeBuffer(t *testing.T) {
-	srv := NewFileServer(secret)
-
-	socket := newSocketPath()
-	sock, err := net.Listen("unix", socket)
-	assert.NoError(t, err)
-	go func() {
-		err = srv.Serve(sock)
-		assert.EqualValues(t, http.ErrServerClosed, err)
-	}()
+	srv := NewFileServer(prefix, secret)
+	testServer := httptest.NewServer(srv)
 
 	fileID, err := RandomFileID()
 	assert.NoError(t, err)
@@ -86,7 +71,7 @@ func TestWriterCopyFileLargeBuffer(t *testing.T) {
 	err = srv.ServeFileWriter(context.Background(), fileID, dst)
 	assert.NoError(t, err)
 
-	wrtr := NewCustomClientWriter(context.Background(), newHTTPUnixClient(socket), "http://server", secret, fileID)
+	wrtr := NewWriter(context.Background(), testServer.URL+prefix, secret, fileID)
 
 	src, err := randomFile(17_177_717)
 	assert.NoError(t, err)
@@ -112,19 +97,11 @@ func TestWriterCopyFileLargeBuffer(t *testing.T) {
 	assert.EqualValues(t, srcBuf, dstBuf)
 
 	assert.NoError(t, wrtr.Close())
-	assert.NoError(t, srv.Shutdown(context.Background()))
 }
 
 func TestPutRequest(t *testing.T) {
-	srv := NewFileServer(secret)
-
-	socket := newSocketPath()
-	sock, err := net.Listen("unix", socket)
-	assert.NoError(t, err)
-	go func() {
-		err = srv.Serve(sock)
-		assert.EqualValues(t, http.ErrServerClosed, err)
-	}()
+	srv := NewFileServer(prefix, secret)
+	testServer := httptest.NewServer(srv)
 
 	fileID, err := RandomFileID()
 	assert.NoError(t, err)
@@ -138,8 +115,7 @@ func TestPutRequest(t *testing.T) {
 	err = srv.ServeFileWriter(context.Background(), fileID, dst)
 	assert.NoError(t, err)
 
-	client := newHTTPUnixClient(socket)
-	wrtr := NewCustomClientWriter(context.Background(), client, "http://server", secret, fileID)
+	wrtr := NewWriter(context.Background(), testServer.URL+prefix, secret, fileID)
 
 	src, err := randomFile(133_799)
 	assert.NoError(t, err)
@@ -152,7 +128,7 @@ func TestPutRequest(t *testing.T) {
 
 	req, err := http.NewRequest(http.MethodPut, wrtr.PutURL(), src)
 	assert.NoError(t, err)
-	resp, err := client.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	assert.NoError(t, err)
 	_ = resp.Body.Close()
 
@@ -175,5 +151,4 @@ func TestPutRequest(t *testing.T) {
 	assert.EqualValues(t, srcBuf, dstBuf)
 
 	assert.NoError(t, wrtr.Close())
-	assert.NoError(t, srv.Shutdown(context.Background()))
 }

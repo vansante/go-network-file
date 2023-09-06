@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -47,8 +47,8 @@ func RandomSharedSecret(bytes int) (string, error) {
 
 // FileServer is an HTTP server that serves files as io.Readers or io.Writers
 type FileServer struct {
+	urlPrefix         string
 	sharedSecret      string
-	server            *http.Server
 	readers           map[FileID]*concurrentReadSeeker
 	writers           map[FileID]*concurrentWriteSeeker
 	allowStat         bool // Allow disclosing the information of Stat()
@@ -63,8 +63,9 @@ type FileServer struct {
 }
 
 // NewFileServer creates a new FileServer with a given shared secret
-func NewFileServer(sharedSecret string) (fs *FileServer) {
+func NewFileServer(urlPrefix, sharedSecret string) (fs *FileServer) {
 	fs = &FileServer{
+		urlPrefix:         urlPrefix,
 		sharedSecret:      sharedSecret,
 		readers:           make(map[FileID]*concurrentReadSeeker),
 		writers:           make(map[FileID]*concurrentWriteSeeker),
@@ -78,11 +79,6 @@ func NewFileServer(sharedSecret string) (fs *FileServer) {
 		logger:            slog.Default(),
 	}
 
-	// TODO: FIXME: Pass in context here
-	fs.server = &http.Server{
-		Handler:           fs,
-		ReadHeaderTimeout: 10 * time.Second,
-	}
 	return fs
 }
 
@@ -122,26 +118,6 @@ func (fs *FileServer) CloseIO(closeReaders, closeWriters bool) {
 	fs.closeWriters = closeWriters
 }
 
-// Serve starts serving the FileServer over HTTP over the given socket
-// Serve always returns a non-nil error. After Shutdown or Close, the
-// returned error is ErrServerClosed.
-func (fs *FileServer) Serve(socket net.Listener) error {
-	return fs.server.Serve(socket)
-}
-
-// ServeTLS starts serving the FileServer over HTTPS over the given socket
-// ServeTLS always returns a non-nil error. After Shutdown or Close, the
-// returned error is ErrServerClosed.
-func (fs *FileServer) ServeTLS(socket net.Listener, certFile, keyFile string) error {
-	return fs.server.ServeTLS(socket, certFile, keyFile)
-}
-
-// Shutdown shuts down the HTTP server gracefully with a context.
-// The socket needs to be closed manually
-func (fs *FileServer) Shutdown(ctx context.Context) error {
-	return fs.server.Shutdown(ctx)
-}
-
 // SharedSecret returns the shared secret
 func (fs *FileServer) SharedSecret() string {
 	return fs.sharedSecret
@@ -149,6 +125,13 @@ func (fs *FileServer) SharedSecret() string {
 
 // ServeHTTP is called for each incoming http request and handles the routing and sharedSecret check
 func (fs *FileServer) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
+	if fs.urlPrefix != "" && !strings.HasPrefix(req.URL.Path, fs.urlPrefix) {
+		fs.logger.Debug("networkfile.FileServer.ServeHTTP: Invalid URL prefix",
+			"url", req.URL.Path, "prefix", fs.urlPrefix)
+		resp.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
 	secret := req.Header.Get(HeaderSharedSecret)
 	if secret == "" {
 		secret = req.URL.Query().Get(GETSharedSecret)
@@ -159,9 +142,10 @@ func (fs *FileServer) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	url := strings.TrimPrefix(req.URL.Path, fs.urlPrefix)
 	// The expected URL format is /:fileID here.
-	url := req.URL.Path
 	if url[:1] != "/" {
+		fs.logger.Debug("networkfile.FileServer.ServeHTTP: Invalid URL prefix", "url", req.URL.Path)
 		resp.WriteHeader(http.StatusBadRequest)
 		return
 	}
