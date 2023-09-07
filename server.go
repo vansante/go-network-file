@@ -339,7 +339,7 @@ func (fs *FileServer) handleReadFile(resp http.ResponseWriter, req *http.Request
 	if fs.allowFullGET && req.Header.Get(HeaderRange) == "" {
 		// If the special range header is not set, treat it like a normal GET request
 		// Serve the file with the Go http handler to support partial requests
-		http.ServeContent(resp, req, string(fileID), time.Now(), reader.New())
+		http.ServeContent(resp, req, string(fileID), time.Now(), reader.newReadSeeker())
 		return
 	}
 
@@ -350,7 +350,7 @@ func (fs *FileServer) handleReadFile(resp http.ResponseWriter, req *http.Request
 
 	resp.WriteHeader(http.StatusPartialContent)
 
-	rdr := reader.New()
+	rdr := reader.newReadSeeker()
 	_, err := rdr.Seek(offset, io.SeekStart)
 	if err != nil {
 		fs.logger.Error("networkfile.FileServer.handleReadFile: Error seeking to offset",
@@ -385,7 +385,7 @@ func (fs *FileServer) handleWriteFile(resp http.ResponseWriter, req *http.Reques
 		return
 	}
 
-	wrtr := writer.New()
+	wrtr := writer.newWriteSeeker()
 	fs.logger.Debug("networkfile.FileServer.handleWriteFile: Seeking", "offset", offset)
 	_, err := wrtr.Seek(offset, io.SeekStart)
 	if err != nil {

@@ -11,7 +11,7 @@ type concurrentReadSeeker struct {
 	mu         sync.Mutex
 }
 
-func (rs *concurrentReadSeeker) New() io.ReadSeeker {
+func (rs *concurrentReadSeeker) newReadSeeker() io.ReadSeeker {
 	return &readSeeker{
 		parent: rs,
 	}

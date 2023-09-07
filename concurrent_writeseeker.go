@@ -11,7 +11,7 @@ type concurrentWriteSeeker struct {
 	mu         sync.Mutex
 }
 
-func (rs *concurrentWriteSeeker) New() io.WriteSeeker {
+func (rs *concurrentWriteSeeker) newWriteSeeker() io.WriteSeeker {
 	return &writeSeeker{
 		parent: rs,
 	}
