@@ -108,8 +108,8 @@ func (fs *FileServer) AllowPUT(allow bool) {
 }
 
 // DiscloseFilenames sets whether the real filenames should be disclosed on Stat()
-func (fs *FileServer) DiscloseFilenames(secret bool) {
-	fs.discloseFilenames = secret
+func (fs *FileServer) DiscloseFilenames(disclose bool) {
+	fs.discloseFilenames = disclose
 }
 
 // CloseIO allows setting whether the server should attempt to close io.ReaderAts and io.WriterAts once its done with them
