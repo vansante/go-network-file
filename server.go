@@ -192,7 +192,7 @@ func (fs *FileServer) ServeFileReader(ctx context.Context, fileID FileID, file i
 
 		fs.mu.Lock()
 		if fs.closeReader(fileID) {
-			fs.logger.Info("networkfile.FileServer.ServeFileReader: Context for file reader expired", "fileID", fileID)
+			fs.logger.Debug("networkfile.FileServer.ServeFileReader: Context for file reader expired", "fileID", fileID)
 		}
 		fs.mu.Unlock()
 	}()
@@ -223,7 +223,7 @@ func (fs *FileServer) ServeFileWriter(ctx context.Context, fileID FileID, file i
 
 		fs.mu.Lock()
 		if fs.closeWriter(fileID) {
-			fs.logger.Info("networkfile.FileServer.ServeFileWriter: Context for file writer expired", "fileID", fileID)
+			fs.logger.Debug("networkfile.FileServer.ServeFileWriter: Context for file writer expired", "fileID", fileID)
 		}
 		fs.mu.Unlock()
 	}()
