@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 )
 
 // Reader is a byte reader for a remote io.Reader served by a FileServer
@@ -49,11 +50,26 @@ func (r *Reader) FullReadURL() string {
 	return fmt.Sprintf("%s/%s?%s=%s", r.baseURL, r.fileID, GETSharedSecret, r.sharedSecret)
 }
 
+// Stat returns the remote file information
+func (r *Reader) Stat() (os.FileInfo, error) {
+	return r.file.Stat()
+}
+
+// Close tells the server to close the remote file
+func (r *Reader) Close() error {
+	return r.close()
+}
+
 // Read reads from the remote file
 func (r *Reader) Read(buf []byte) (n int, err error) {
 	n, err = r.read(buf, r.offset)
 	r.offset += int64(n)
 	return n, err
+}
+
+// Seek seeks to the given offset from the given mode
+func (r *Reader) Seek(offset int64, whence int) (int64, error) {
+	return r.file.Seek(offset, whence)
 }
 
 // ReadAt reads from the remote file at a given offset

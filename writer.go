@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 )
 
 // Writer is a byte writer for a remote io.Writer served by a FileServer
@@ -49,11 +50,26 @@ func (w *Writer) PutURL() string {
 	return fmt.Sprintf("%s/%s?%s=%s", w.baseURL, w.fileID, GETSharedSecret, w.sharedSecret)
 }
 
+// Stat returns the remote file information
+func (w *Writer) Stat() (os.FileInfo, error) {
+	return w.file.Stat()
+}
+
+// Close tells the server to close the remote file
+func (w *Writer) Close() error {
+	return w.close()
+}
+
 // Write writes to the remote file
 func (w *Writer) Write(buf []byte) (n int, err error) {
 	n, err = w.write(buf, w.offset)
 	w.offset += int64(n)
 	return n, err
+}
+
+// Seek seeks to the given offset from the given mode
+func (w *Writer) Seek(offset int64, whence int) (int64, error) {
+	return w.file.Seek(offset, whence)
 }
 
 // WriteAt writes to the remote file at a given offset
