@@ -75,6 +75,7 @@ func (f *file) prepareRequest(method, url string, body io.Reader) (*http.Request
 	var req *http.Request
 	var err error
 	if f.ctx == nil {
+		// nolint:noctx
 		req, err = http.NewRequest(method, url, body)
 	} else {
 		req, err = http.NewRequestWithContext(f.ctx, method, url, body)

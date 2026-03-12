@@ -53,6 +53,7 @@ func writeErrorToResponseWriter(rw http.ResponseWriter, err error) {
 	code, ok := errToHTTPCode[err]
 	if !ok {
 		rw.WriteHeader(HTTPCodeUnknownError)
+		//nolint:gosec
 		_, _ = rw.Write([]byte(err.Error()))
 		return
 	}
