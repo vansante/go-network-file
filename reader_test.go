@@ -322,5 +322,5 @@ func TestReaderLargeFile(t *testing.T) {
 
 	n, err := io.CopyBuffer(dst, rdr, make([]byte, 32*1024))
 	require.NoError(t, err)
-	assert.Equal(t, 1337*1337*13, n)
+	assert.EqualValues(t, 1337*1337*13, n)
 }
